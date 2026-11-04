@@ -1,0 +1,20 @@
+{
+  "service": "order-worker",
+  "function": "order-worker",
+  "region": "us-east-1",
+  "deploy": {
+    "commit": "8f3a1c",
+    "message": "order-worker: compute order totals inline",
+    "author": "deploy-bot",
+    "deployed_at": "2026-11-04T08:42:00Z",
+    "note": "Fake deploy record for the demo. The commit id is illustrative."
+  },
+  "config": {
+    "runtime": "nodejs22.x",
+    "memory_mb": 512,
+    "timeout_s": 5,
+    "batch_size": 10,
+    "queue": "orders",
+    "dlq": "orders-dlq"
+  }
+}

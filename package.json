@@ -5,6 +5,8 @@
   "scripts": {
     "scenario:up": "bash scenario/infra/up.sh",
     "scenario:reset": "bash scenario/infra/reset.sh",
+    "scenario:status": "bash scenario/infra/status.sh",
+    "scenario:test": "node --import tsx --test scenario/order-worker/test/*.test.ts",
     "burn:start": "tsx scenario/inject/start.ts",
     "burn:stop": "tsx scenario/inject/stop.ts",
     "watchdog:dev": "tsx watch watchdog/src/index.ts",
@@ -28,5 +30,8 @@
   "private": true,
   "engines": {
     "node": ">=20.12"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sqs": "3.1161.0"
   }
 }

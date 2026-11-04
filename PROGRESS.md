@@ -9,7 +9,7 @@
 - [x] Never purge queues or delete messages (standing rule)
 - [x] Secrets in `.env` only; `.env.example` added; `.env` ignored
 - [ ] Lambda rates in `config/pricing.json` with a TODO for you (Phase 3)
-- [x] PROGRESS.md maintained; commit per phase
+- [x] PROGRESS.md maintained (you make the commits and tags yourself)
 
 ## Phase 0 — Scaffold
 
@@ -19,11 +19,13 @@
 
 ## Phase 1 — The burning scenario (LocalStack)
 
-- [ ] `orders` queue, no redrive; `orders-dlq` exists but unwired
-- [ ] `order-worker` Lambda with the intentional bug (throws on missing `items`, no partial batch failures)
-- [ ] Buggy handler on a commit tagged `scenario-start`; `scenario/deploy-manifest.json` with fake deploy commit `8f3a1c`
-- [ ] `inject/`: normal traffic + N poison messages
-- [ ] `scenario:reset`
+- [x] `orders` queue, no redrive; `orders-dlq` exists but unwired (`scenario/infra/up.sh`)
+- [x] `order-worker` Lambda with the intentional bug (throws on missing `items`, no partial batch failures)
+- [x] `scenario/deploy-manifest.json` with fake deploy commit `8f3a1c`
+- [ ] You: commit Phase 1 and run `git tag scenario-start` on that commit
+- [x] `inject/`: normal traffic + N poison messages (`burn:start` / `burn:stop`)
+- [x] `scenario:reset` (restores code from the tag; `--fresh` restarts LocalStack for empty queues)
+- [x] `scenario:status` (`-- --watch`) to see the storm
 - [ ] **CHECKPOINT 1:** retry storm visible
 
 ## Phase 2 — @burn-watchdog: connect to Switch
