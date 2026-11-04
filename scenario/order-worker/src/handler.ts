@@ -24,6 +24,14 @@ export function priceOrder(order: Order): number {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function handler(event: SQSEvent): Promise<void> {
+  const receives = event.Records.map((r) => Number(r.attributes.ApproximateReceiveCount));
+  console.log(
+    JSON.stringify({
+      msg: "batch received",
+      size: receives.length,
+      maxReceiveCount: Math.max(...receives),
+    }),
+  );
   for (const record of event.Records) {
     const order = JSON.parse(record.body) as Order;
     const total = priceOrder(order);

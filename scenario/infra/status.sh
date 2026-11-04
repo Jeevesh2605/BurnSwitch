@@ -35,9 +35,11 @@ snapshot() {
   echo "  Errors per minute (UTC):";      metric_per_minute Errors
   echo "  Handler errors in the last 2 min:"
   local since=$(( ($(date +%s) - 120) * 1000 ))
+  # Filter here rather than with --filter-pattern: LocalStack ignores the pattern.
   awsl logs filter-log-events --log-group-name "/aws/lambda/$FUNCTION" --start-time "$since" \
-    --filter-pattern '"ERROR"' --query 'length(events)' --output text 2>/dev/null \
-    | sed 's/^/    /' || echo "    (no log group yet)"
+    --query 'events[].message' --output json 2>/dev/null \
+    | jq -r '[.[] | select(test("\tERROR\t"))] | length' | sed 's/^/    /' \
+    || echo "    (no log group yet)"
 }
 
 if $WATCH; then

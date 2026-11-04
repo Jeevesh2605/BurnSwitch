@@ -26,7 +26,7 @@
 - [x] `inject/`: normal traffic + N poison messages (`burn:start` / `burn:stop`)
 - [x] `scenario:reset` (restores code from the tag; `--fresh` restarts LocalStack for empty queues)
 - [x] `scenario:status` (`-- --watch`) to see the storm
-- [ ] **CHECKPOINT 1:** retry storm visible
+- [x] **CHECKPOINT 1:** retry storm visible (2026-11-04: invocations 110→245/min, errors 10→226/min, 243 in flight, receive counts up to 26, DLQ empty) — waiting for your OK
 
 ## Phase 2 — @burn-watchdog: connect to Switch
 
@@ -72,9 +72,17 @@
 - [ ] README, Mermaid architecture, quickstart, Switch feature map, video placeholder
 - [ ] `docs/architecture.md`, troubleshooting
 
+## Decisions
+
+- Messaging app: **Telegram only** (one room maps to one app). Approval requests get inline Allow/Deny buttons; Switch polls Telegram, so nothing has to be publicly reachable.
+- Local Switch server (run by Switch Console, switch-core 0.31.0): bridge URL `http://127.0.0.1:49741` (port picked by Console; recheck with `GET /health` if it changes).
+- LocalStack: auth token required; image pinned to `2026.10.0`.
+
 ## Notes from the Switch docs (verified 2026-11-04)
 
-- Room documents can't be opened from Mattermost/Telegram; people see them via `!list-documents`, Switch Console or the Gateway.
+- Room documents can't be opened from Telegram; people see them via `!list-documents`, Switch Console or the Gateway.
 - Addressing another agent: use `send_targeted_message` (`target_names`), not an `@name` inside `post_message`.
 - `create_room_document` / `update_room_document` need a connection bound to the room (connection id header).
 - Approval answers (`answered_by`) are stored server-side but no agent operation exposes them; `read_context` returns only messages and joins.
+- Telegram: agent names don't autocomplete; type the name in full (`!list-agents` lists them). Group Privacy must be off in BotFather _before_ adding the bot.
+- LocalStack ignores CloudWatch Logs `--filter-pattern`; filter log lines client-side.
