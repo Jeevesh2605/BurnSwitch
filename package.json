@@ -1,0 +1,32 @@
+{
+  "name": "burnswitch",
+  "version": "0.1.0",
+  "description": "Switch room where a cloud watchdog agent, a Claude Code agent and a human stop a runaway Lambda/SQS retry storm together.",
+  "scripts": {
+    "scenario:up": "bash scenario/infra/up.sh",
+    "scenario:reset": "bash scenario/infra/reset.sh",
+    "burn:start": "tsx scenario/inject/start.ts",
+    "burn:stop": "tsx scenario/inject/stop.ts",
+    "watchdog:dev": "tsx watch watchdog/src/index.ts",
+    "watchdog:start": "tsx watchdog/src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.6.6",
+    "eslint": "10.14.0",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=20.12"
+  }
+}

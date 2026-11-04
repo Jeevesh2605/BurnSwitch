@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.zip
+.env
+.env.*
+!.env.example
+.localstack/
+# Runtime state written by the watchdog (agent id, connection id, cursor)
+.state/
+.DS_Store
