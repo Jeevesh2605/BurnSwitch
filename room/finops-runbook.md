@@ -72,6 +72,12 @@ bin/aws-local lambda list-event-source-mappings --function-name order-worker --q
 bin/aws-local lambda update-event-source-mapping --uuid <UUID> --function-response-types ReportBatchItemFailures
 ```
 
+Then check the mapping is still **Enabled**, with a direct read (LocalStack's list command can show a stale "Disabled" for a minute after an update):
+
+```bash
+bin/aws-local lambda get-event-source-mapping --uuid <UUID> --query State
+```
+
 **4d. LIVE: resume processing.**
 
 ```bash

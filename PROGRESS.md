@@ -69,7 +69,17 @@
 - [x] `docs/setup.md` (Telegram only)
 - [x] `scenario/bin/`: `aws-local` (LocalStack AWS CLI, refuses purge/delete), `repro` (handler in a node:22 container on `order-worker/repro/poison-batch.json`), `deploy-worker`
 - [x] Scenario scripts load only `AWS_*` from `.env`, so @claude-code never holds the Switch key
-- [ ] **CHECKPOINT 5:** you do the manual Console setup (`docs/setup.md` steps 2, 4, 5); I help debug
+- [x] **CHECKPOINT 5:** Console setup done and a full run with real approvals (2026-11-05, INC-20261105-0643-59c8):
+  - alert 06:43:38 → @claude-code root cause in ~1 min, containment + patch + recovery proposed before any approval
+  - 6 live changes, each approved in Telegram and recorded in the ledger from "Approved by" lines
+  - contained 06:56:10, resolved 07:16:03; burn $0.115/hr peak → $0.006/hr; 773 messages kept in the DLQ
+  - @finops-auditor joined late, wrote an accurate post-mortem, and flagged the two ledger rows without approvals (a LocalStack status glitch)
+- [x] @claude-code's fix saved as `docs/reference/order-worker-fix.patch` (outside `scenario/`, so the agent can't see it); `scenario/order-worker` restored to the buggy version
+- Lessons from the run:
+  - Messages to agents must start with `@name` ("Run 3a" never reached @claude-code: 7 min lost). Added to the setup guide troubleshooting
+  - Console agent **Directory**: pick it with **Choose…**. A typed path without the leading `/` silently fell back to `~/.switch/agents/...`, and editing it later doesn't move a running agent: delete and recreate
+  - Agent instructions box: paste the full file. The first attempt saved the description text
+  - LocalStack's `list-event-source-mappings` can report a stale `Disabled` after an update. The watchdog now reads state with `get-event-source-mapping`; the runbook checks it after 4c
 
 ## Phase 6 — Rehearsal and hardening
 

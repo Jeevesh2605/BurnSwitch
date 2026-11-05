@@ -99,16 +99,17 @@ What should happen:
 4. @burn-watchdog posts 🧯 contained.
 5. @claude-code patches and tests, then proposes recovery. Approve deploy, ReportBatchItemFailures and the concurrency restore, one at a time.
 6. @burn-watchdog posts ✅ resolved.
-7. `npm run burn:stop`, then `!invite-agent @finops-auditor` and `@finops-auditor please write the post-mortem`.
+7. `npm run burn:stop`, then `!invite-agent @finops-auditor` and `@finops-auditor please write the post-mortem for INC-…` (use the incident id from the alert).
 
 Afterwards: `npm run ledger:show` prints the full ledger.
 
 ## Troubleshooting
 
-| Symptom                                                     | Fix                                                                                                                                 |
-| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Alert says "couldn't address @claude-code directly"         | @claude-code isn't in the room or isn't named `claude-code`. Check with `!list-agents`.                                             |
-| @claude-code never asks for approval and just runs commands | Auto mode or Bypass permissions is on. Turn both off on its page (**General**), then send `!reset @claude-code`.                    |
-| Nobody answers in Telegram                                  | The Telegram bridge stopped (often after a network timeout). Use **Connectors → Telegram → ⋮ → Disconnect app…** and connect again. |
-| Watchdog can't reach Switch                                 | Switch Console may have moved ports after a restart. The watchdog re-reads them; restart it.                                        |
-| `docker compose` says Docker Desktop is paused              | Resume it from the whale menu.                                                                                                      |
+| Symptom                                                     | Fix                                                                                                                                                                                  |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| An agent ignores your message ("run 3a" gets no reply)      | Start every message to an agent with its name, e.g. `@claude-code run 3a`. Messages without it don't reach the agent. Commands start with `!` (`!invite-agent`, not `Invite-agent`). |
+| Alert says "couldn't address @claude-code directly"         | @claude-code isn't in the room or isn't named `claude-code`. Check with `!list-agents`.                                                                                              |
+| @claude-code never asks for approval and just runs commands | Auto mode or Bypass permissions is on. Turn both off on its page (**General**), then send `!reset @claude-code`.                                                                     |
+| Nobody answers in Telegram                                  | The Telegram bridge stopped (often after a network timeout). Use **Connectors → Telegram → ⋮ → Disconnect app…** and connect again.                                                  |
+| Watchdog can't reach Switch                                 | Switch Console may have moved ports after a restart. The watchdog re-reads them; restart it.                                                                                         |
+| `docker compose` says Docker Desktop is paused              | Resume it from the whale menu.                                                                                                                                                       |

@@ -1,0 +1,129 @@
+diff --git a/scenario/order-worker/src/handler.ts b/scenario/order-worker/src/handler.ts
+index 886468e..91c8420 100644
+--- a/scenario/order-worker/src/handler.ts
++++ b/scenario/order-worker/src/handler.ts
+@@ -1,7 +1,7 @@
+ // order-worker: consumes the `orders` SQS queue and prices each order.
+ //
+ // Deployed in commit 8f3a1c ("order-worker: compute order totals inline").
+-import type { SQSEvent } from "./types.js";
++import type { SQSBatchResponse, SQSEvent } from "./types.js";
+ 
+ export interface OrderItem {
+   sku: string;
+@@ -15,6 +15,34 @@ export interface Order {
+   items: OrderItem[];
+ }
+ 
++// A payload that can never be priced. Retrying it is pointless, so withRetry rethrows at once.
++export class ValidationError extends Error {
++  override name = "ValidationError";
++}
++
++const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
++
++export function parseOrder(body: string): Order {
++  let raw: unknown;
++  try {
++    raw = JSON.parse(body);
++  } catch {
++    throw new ValidationError("body is not valid JSON");
++  }
++  if (typeof raw !== "object" || raw === null) throw new ValidationError("body is not an object");
++  const o = raw as Record<string, unknown>;
++  if (typeof o.orderId !== "string" || !o.orderId) throw new ValidationError("missing orderId");
++  if (typeof o.customerId !== "string" || !o.customerId) throw new ValidationError("missing customerId");
++  if (!Array.isArray(o.items) || o.items.length === 0) throw new ValidationError("missing or empty items");
++  for (const item of o.items as unknown[]) {
++    const i = item as Record<string, unknown> | null;
++    if (!i || typeof i.sku !== "string" || !isNum(i.qty) || i.qty <= 0 || !isNum(i.unitPrice) || i.unitPrice < 0) {
++      throw new ValidationError("invalid item");
++    }
++  }
++  return o as unknown as Order;
++}
++
+ export function priceOrder(order: Order): number {
+   const subtotal = order.items.reduce((sum, item) => sum + item.qty * item.unitPrice, 0);
+   return Math.round(subtotal * 1.08 * 100) / 100; // 8% tax
+@@ -28,7 +56,7 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3, baseMs = 1000):
+     try {
+       return await fn();
+     } catch (err) {
+-      if (i >= attempts) throw err;
++      if (err instanceof ValidationError || i >= attempts) throw err;
+       await sleep(baseMs * 2 ** (i - 1));
+     }
+   }
+@@ -40,7 +68,10 @@ async function processOrder(order: Order): Promise<number> {
+   return total;
+ }
+ 
+-export async function handler(event: SQSEvent): Promise<void> {
++// Reports only the failed messages (needs ReportBatchItemFailures on the event source mapping),
++// so good orders in the same batch are deleted instead of being retried with the bad one.
++export async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
++  const batchItemFailures: SQSBatchResponse["batchItemFailures"] = [];
+   const receives = event.Records.map((r) => Number(r.attributes.ApproximateReceiveCount));
+   console.log(
+     JSON.stringify({
+@@ -50,8 +81,21 @@ export async function handler(event: SQSEvent): Promise<void> {
+     }),
+   );
+   for (const record of event.Records) {
+-    const order = JSON.parse(record.body) as Order;
+-    const total = await withRetry(() => processOrder(order));
+-    console.log(JSON.stringify({ msg: "order priced", orderId: order.orderId, total }));
++    try {
++      const order = parseOrder(record.body);
++      const total = await withRetry(() => processOrder(order));
++      console.log(JSON.stringify({ msg: "order priced", orderId: order.orderId, total }));
++    } catch (err) {
++      const e = err as Error;
++      console.error(
++        JSON.stringify({
++          msg: e instanceof ValidationError ? "invalid order" : "order failed",
++          messageId: record.messageId,
++          error: e.message,
++        }),
++      );
++      batchItemFailures.push({ itemIdentifier: record.messageId });
++    }
+   }
++  return { batchItemFailures };
+ }
+diff --git a/scenario/order-worker/test/handler.test.ts b/scenario/order-worker/test/handler.test.ts
+index 411a79d..1304e17 100644
+--- a/scenario/order-worker/test/handler.test.ts
++++ b/scenario/order-worker/test/handler.test.ts
+@@ -26,5 +26,29 @@ test("handler processes a batch of valid orders", async () => {
+       record({ orderId: "o-1", customerId: "c-1", items: [{ sku: "A", qty: 1, unitPrice: 5 }] }),
+     ],
+   };
+-  await assert.doesNotReject(handler(event));
++  assert.deepEqual(await handler(event), { batchItemFailures: [] });
++});
++
++test("malformed order fails alone, fast, without retries", async () => {
++  const event: SQSEvent = {
++    Records: [
++      record({ orderId: "o-1", customerId: "c-1", items: [{ sku: "A", qty: 1, unitPrice: 5 }] }, "good"),
++      record(
++        {
++          orderId: "o-2",
++          customerId: "c-2",
++          lineItems: [{ sku: "B", qty: 1, unitPrice: 29.99 }],
++          source: "checkout-v2",
++        },
++        "bad-v2",
++      ),
++      { ...record({}, "bad-json"), body: "{not json" },
++    ],
++  };
++  const t0 = Date.now();
++  const res = await handler(event);
++  assert.deepEqual(res, {
++    batchItemFailures: [{ itemIdentifier: "bad-v2" }, { itemIdentifier: "bad-json" }],
++  });
++  assert.ok(Date.now() - t0 < 900, "validation errors must not be retried with backoff");
+ });

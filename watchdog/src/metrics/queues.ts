@@ -1,5 +1,6 @@
 import {
   GetFunctionConcurrencyCommand,
+  GetEventSourceMappingCommand,
   GetFunctionConfigurationCommand,
   ListEventSourceMappingsCommand,
 } from "@aws-sdk/client-lambda";
@@ -40,7 +41,11 @@ export async function readInfra(fn: string, queue: string, dlq: string) {
     aws.lambda.send(new GetFunctionConfigurationCommand({ FunctionName: fn })),
     aws.lambda.send(new ListEventSourceMappingsCommand({ FunctionName: fn })),
   ]);
-  const mapping = esm.EventSourceMappings?.[0];
+  // LocalStack's list can report a stale State after an update; a direct get is current.
+  const uuid = esm.EventSourceMappings?.[0]?.UUID;
+  const mapping = uuid
+    ? await aws.lambda.send(new GetEventSourceMappingCommand({ UUID: uuid }))
+    : undefined;
   return {
     queueVisible: Number(q.ApproximateNumberOfMessages ?? 0),
     queueInFlight: Number(q.ApproximateNumberOfMessagesNotVisible ?? 0),
