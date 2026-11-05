@@ -14,13 +14,20 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "watchdog:register": "tsx watchdog/src/switch/register.ts",
+    "watchdog:hello": "tsx watchdog/src/switch/hello.ts",
+    "switch:registration-key": "tsx scripts/console-registration-key.ts",
+    "watchdog:test": "node --import tsx --test watchdog/test/*.test.ts",
+    "test": "npm run -s scenario:test && npm run -s watchdog:test",
+    "metrics:record": "tsx watchdog/src/metrics/record.ts"
   },
   "license": "MIT",
   "type": "module",
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "26.6.6",
+    "@types/ws": "8.18.2",
     "eslint": "10.14.0",
     "prettier": "3.9.10",
     "tsx": "4.23.15",
@@ -32,6 +39,10 @@
     "node": ">=20.12"
   },
   "dependencies": {
-    "@aws-sdk/client-sqs": "3.1161.0"
+    "@aws-sdk/client-cloudwatch": "3.1161.0",
+    "@aws-sdk/client-cloudwatch-logs": "3.1161.0",
+    "@aws-sdk/client-lambda": "3.1161.0",
+    "@aws-sdk/client-sqs": "3.1161.0",
+    "ws": "8.22.1"
   }
 }

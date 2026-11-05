@@ -26,23 +26,25 @@
 - [x] `inject/`: normal traffic + N poison messages (`burn:start` / `burn:stop`)
 - [x] `scenario:reset` (restores code from the tag; `--fresh` restarts LocalStack for empty queues)
 - [x] `scenario:status` (`-- --watch`) to see the storm
-- [x] **CHECKPOINT 1:** retry storm visible (2026-11-04: invocations 110→245/min, errors 10→226/min, 243 in flight, receive counts up to 26, DLQ empty) — waiting for your OK
+- [x] **CHECKPOINT 1:** retry storm visible (2026-11-04: invocations 110→245/min, errors 10→226/min, 243 in flight, receive counts up to 26, DLQ empty) — approved
 
 ## Phase 2 — @burn-watchdog: connect to Switch
 
-- [ ] Registration script (save API key once, set addressing)
-- [ ] WebSocket client (pings, reconnect with backoff, ignore unaddressed)
-- [ ] HTTP ops helper + `POST /agents/{id}/message`
-- [ ] Verify bridge base URL with `GET /health`
-- [ ] **CHECKPOINT 2:** "hello" visible in #finops-control
+- [x] Registration script `npm run watchdog:register` (saves API key to .env at once, finds + joins the room) — done: agent `c7e20daf-5e61-4f50-a1a7-7a570b975b81`
+- [x] WebSocket client (pings first, resume from cursor, backoff, stop on `taken_over`/`closed`, only `addressed` messages acted on)
+- [x] HTTP ops helper + `POST /agents/{id}/message` (`npm run watchdog:hello`)
+- [x] Bridge base URL verified with `GET /health`, falls back to Switch Console's `ports.json`
+- [x] **CHECKPOINT 2:** "hello" visible in #finops-control — confirmed 2026-11-04 (hello visible; `burn-watchdog hi` gets a reply)
 
 ## Phase 3 — Metrics, cost model, detection
 
-- [ ] Metrics adapters: `cloudwatch`, `localstack-probe`, `replay`
-- [ ] Cost model from `config/pricing.json`
-- [ ] Detection with rolling baseline, one incident id, no duplicates
-- [ ] Single handoff to @claude-code with loop guard
-- [ ] Recovery detection + resolution message
+- [x] Metrics adapters: `cloudwatch`, `localstack-probe` (default; reads REPORT/ERROR log lines + SQS), `replay` (+ `npm run metrics:record`)
+- [x] Cost model from `config/pricing.json` (requests + GB-seconds)
+- [ ] You: fill the two Lambda rates in `config/pricing.json` (watchdog refuses to start without them)
+- [x] Detection with rolling baseline, one incident id, no duplicates (unit-tested)
+- [x] Single handoff to @claude-code with loop guard (persisted before sending)
+- [x] Containment + resolution messages (threaded under the alert)
+- [ ] Record `watchdog/fixtures/storm.json` from a clean run
 - [ ] **CHECKPOINT 3:** alert within ~1 min, exactly once
 
 ## Phase 4 — Ledger
@@ -75,7 +77,8 @@
 ## Decisions
 
 - Messaging app: **Telegram only** (one room maps to one app). Approval requests get inline Allow/Deny buttons; Switch polls Telegram, so nothing has to be publicly reachable.
-- Local Switch server (run by Switch Console, switch-core 0.31.0): bridge URL `http://127.0.0.1:49741` (port picked by Console; recheck with `GET /health` if it changes).
+- Local Switch server (run by Switch Console, switch-core 0.31.0): bridge `http://127.0.0.1:50556`, Gateway `http://127.0.0.1:50555`. Console can move ports on restart; the watchdog re-reads them from Console's `ports.json`.
+- Room: `BurnSwitch: finops-control` (`77c411ba-1549-4057-9333-046be193408c`), Telegram group.
 - LocalStack: auth token required; image pinned to `2026.10.0`.
 
 ## Notes from the Switch docs (verified 2026-11-04)
@@ -86,3 +89,7 @@
 - Approval answers (`answered_by`) are stored server-side but no agent operation exposes them; `read_context` returns only messages and joins.
 - Telegram: agent names don't autocomplete; type the name in full (`!list-agents` lists them). Group Privacy must be off in BotFather _before_ adding the bot.
 - LocalStack ignores CloudWatch Logs `--filter-pattern`; filter log lines client-side.
+- switch-core 0.31.0 refuses `update_agent_detail` from the agent itself (403), although the docs allow it. New agents already default to owner + owner's agents, so the watchdog keeps the default; @claude-code's addressing is set in Switch Console.
+- `list_all_rooms` returns `room_id`, not `id`.
+- The local server has no Gateway web page; registration keys come from `npm run switch:registration-key` (uses Switch Console's saved session, asks for Keychain access).
+- LocalStack emits only Invocations/Errors metrics (no Duration/ConcurrentExecutions); the probe adapter derives duration from REPORT log lines.
