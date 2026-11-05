@@ -12,6 +12,7 @@ import { log } from "../log.js";
 import { SwitchHttpError, type SwitchHttp } from "../switch/http.js";
 
 export const LEDGER_NAME = "cost-ledger.md";
+type Doc = { id: string; name: string; created_by_agent_id?: string | null };
 const MAX_CLOSED = 5;
 
 const time = (iso: string) => iso.slice(11, 19);
@@ -112,7 +113,52 @@ export function renderLedger(
     parts.push("", `# Closed incidents (latest ${MAX_CLOSED})`);
     for (const inc of closed) parts.push("", renderIncident(inc, deploy, t));
   }
+  parts.push("", stateMarker(state));
   return parts.join("\n") + "\n";
+}
+
+// ---- State carried in the ledger ----------------------------------------------------------
+// The ledger ends with a hidden comment holding the incident state, so a watchdog that lost
+// .state/ (new machine, deleted folder) resumes the open incident instead of alerting again.
+
+const MARKER = /<!-- burn-watchdog-state v1 ([A-Za-z0-9+/=]+) -->/;
+
+function stateMarker(state: DetectorState): string {
+  const carried = { incident: state.incident, closed: state.closed.slice(-MAX_CLOSED) };
+  const b64 = Buffer.from(JSON.stringify(carried)).toString("base64");
+  return `<!-- burn-watchdog-state v1 ${b64} -->`;
+}
+
+export function parseStateMarker(
+  content: string,
+): Pick<DetectorState, "incident" | "closed"> | undefined {
+  const m = MARKER.exec(content);
+  if (!m) return undefined;
+  try {
+    return JSON.parse(Buffer.from(m[1]!, "base64").toString("utf8")) as Pick<
+      DetectorState,
+      "incident" | "closed"
+    >;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Reads the incident state back from the ledger in the room, if there is one. */
+export async function restoreFromLedger(
+  http: SwitchHttp,
+  agentId: string,
+): Promise<{ documentId: string; state: Pick<DetectorState, "incident" | "closed"> } | undefined> {
+  const res = await http.op<{ documents?: Doc[] }>("list_references");
+  const doc = res.documents?.find(
+    (d) => d.name === LEDGER_NAME && d.created_by_agent_id === agentId,
+  );
+  if (!doc) return undefined;
+  const [loaded] = await http.op<{ content: string }[]>("load_internal_documents", {
+    ids: [doc.id],
+  });
+  const state = loaded ? parseStateMarker(loaded.content) : undefined;
+  return state ? { documentId: doc.id, state } : undefined;
 }
 
 /** What the ledger shows, minus the volatile bits: the document is rewritten when this changes. */
@@ -120,8 +166,6 @@ export function ledgerKey(state: DetectorState): string {
   const k = (i: Incident) => [i.id, i.status, i.timeline?.length ?? 0, i.approvals?.length ?? 0];
   return JSON.stringify([state.incident ? k(state.incident) : null, state.closed.map(k)]);
 }
-
-type Doc = { id: string; name: string; created_by_agent_id?: string | null };
 
 export class Ledger {
   constructor(

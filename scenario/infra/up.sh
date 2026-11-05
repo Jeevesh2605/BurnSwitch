@@ -3,10 +3,16 @@
 #   orders queue (no redrive policy), orders-dlq (exists, not wired up),
 #   order-worker Lambda, and the event source mapping between them.
 # Safe to run more than once.
+#   npm run scenario:up                 LocalStack (default)
+#   npm run scenario:up -- --real-aws   your real AWS account, after a typed confirmation
 source "$(dirname "$0")/lib.sh" "$@"
 
 cd "$ROOT"
-if ! curl -sf "$ENDPOINT/_localstack/health" >/dev/null; then
+confirm_real_aws "CREATE RESOURCES" "
+  Creates: SQS queues $QUEUE + $DLQ, Lambda $FUNCTION (${MEMORY_MB} MB, nodejs22.x),
+           IAM role $ROLE (AWSLambdaSQSQueueExecutionRole), and the event
+           source mapping $QUEUE -> $FUNCTION (batch $BATCH_SIZE, no redrive: the bug)."
+if ! $REAL_AWS && ! curl -sf "$ENDPOINT/_localstack/health" >/dev/null; then
   docker compose up -d localstack
 fi
 wait_for_localstack
@@ -30,5 +36,9 @@ else
   echo "Event source mapping already exists ($(mapping_uuid))."
 fi
 
+# The bin/ helpers @claude-code runs follow this file, so they act where the scenario lives.
+mkdir -p "$ROOT/.state"
+if $REAL_AWS; then echo real >"$ROOT/.state/target"; else echo local >"$ROOT/.state/target"; fi
+
 echo
-echo "Scenario is up. Next: npm run burn:start, then npm run scenario:status -- --watch"
+echo "Scenario is up ($(cat "$ROOT/.state/target")). Next: npm run burn:start, then npm run scenario:status -- --watch"

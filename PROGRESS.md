@@ -83,10 +83,20 @@
 
 ## Phase 6 — Rehearsal and hardening
 
-- [ ] `scripts/rehearse.sh`
-- [ ] Watchdog restart / Switch disconnect / LocalStack restart
-- [ ] `--real-aws` path with loud warning
-- [ ] **CHECKPOINT 6**
+Acts (from the definition of done): 1 burn alert · 2 handoff + diagnosis · 3 containment (approved) · 4 fix + recovery (approved) · 5 resolved + ledger · 6 late auditor.
+
+- [x] `npm run rehearse` (`scripts/rehearse.sh`): preflight → clean state → fresh scenario → watchdog → burn, then a cue per act, waiting for the watchdog to see each one. Works on macOS's bash 3.2
+- [x] `npm run preflight` (`scripts/preflight.ts`): Docker (incl. paused), prices, Switch, who's in the room, room instructions vs `room/instructions.md`. Read-only
+- [x] Watchdog restart mid-incident: resumes from `.state/`, and from the ledger if `.state/` is lost (the ledger carries the incident state in a hidden comment); it waits for that check before sampling, so no second alert
+- [x] Switch disconnect: reconnect with backoff, re-reading Switch Console's ports (handles port moves); posts that can't be sent wait in an outbox (kept in the state file) and go out on reconnect; resume ticket is never wound back (fixes a replay gap after restarts)
+- [x] LocalStack restart: one warning, sampling resumes when it's back, no crash
+- [x] Resilience tests (dry-run watchdog with its own state, behind a TCP relay; nothing posted), 2026-11-05: all passed
+  - one alert per incident; killed + restarted mid-incident → resumed, still one alert
+  - LocalStack restarted mid-incident → outage logged once, sampling back after recreate
+  - Switch cut while the incident was contained → update queued → Switch "back" on another port → found it, sent the update, outbox empty
+- [x] `--real-aws`: `scenario:up/reset/status/down`, `burn:start/stop`, watchdog, `rehearse`. Shows the account + what it creates and needs the account id typed; ignores the dummy LocalStack keys; `bin/` helpers follow `.state/target` with a REAL AWS banner; `--fresh` refused with real AWS; queues never deleted (`scenario:down` prints the commands). Tested: the refusal path only (no resources created)
+- [ ] You (optional): one real-AWS run with your credentials
+- [ ] **CHECKPOINT 6:** `npm run rehearse`, Acts 1–6, no manual fixes
 
 ## Phase 7 — Submission polish
 

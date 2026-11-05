@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { log } from "../log.js";
 
 // Switch Console's local server picks its own ports and records them here (macOS).
-const CONSOLE_PORTS = join(
-  homedir(),
-  "Library/Application Support/switchdash/local-switch-server/ports.json",
-);
+// SWITCH_CONSOLE_PORTS points elsewhere (other OSes, or the resilience tests).
+const consolePorts = () =>
+  process.env.SWITCH_CONSOLE_PORTS ??
+  join(homedir(), "Library/Application Support/switchdash/local-switch-server/ports.json");
 
 async function isHealthy(base: string): Promise<boolean> {
   try {
@@ -28,7 +28,7 @@ export async function resolveBridgeUrl(): Promise<string> {
   if (configured && (await isHealthy(configured))) return configured;
 
   try {
-    const ports = JSON.parse(readFileSync(CONSOLE_PORTS, "utf8")) as { api?: number };
+    const ports = JSON.parse(readFileSync(consolePorts(), "utf8")) as { api?: number };
     if (ports.api) {
       const local = `http://127.0.0.1:${ports.api}`;
       if (await isHealthy(local)) {

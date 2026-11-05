@@ -6,19 +6,33 @@ try {
   // No .env: fall back to LocalStack defaults below.
 }
 
-if (process.argv.includes("--real-aws")) {
-  console.error("--real-aws is not supported yet (Phase 6). Refusing to touch real AWS.");
-  process.exit(1);
+// LocalStack unless --real-aws. Real AWS drops the dummy LocalStack settings from .env and
+// uses your normal credential chain (AWS_PROFILE, or REAL_AWS_PROFILE from .env).
+export const realAws = process.argv.includes("--real-aws");
+if (realAws) {
+  delete process.env.AWS_ENDPOINT_URL;
+  if (process.env.AWS_ACCESS_KEY_ID === "test") {
+    delete process.env.AWS_ACCESS_KEY_ID;
+    delete process.env.AWS_SECRET_ACCESS_KEY;
+  }
+  if (process.env.REAL_AWS_PROFILE) process.env.AWS_PROFILE = process.env.REAL_AWS_PROFILE;
+  console.error(
+    `⚠️  REAL AWS (region ${process.env.AWS_REGION ?? "us-east-1"}): orders go to your real queue and cost money.`,
+  );
 }
 
-export const sqs = new SQSClient({
-  region: process.env.AWS_REGION ?? "us-east-1",
-  endpoint: process.env.AWS_ENDPOINT_URL ?? "http://localhost:4566",
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID ?? "test",
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ?? "test",
-  },
-});
+export const sqs = new SQSClient(
+  realAws
+    ? { region: process.env.AWS_REGION ?? "us-east-1" }
+    : {
+        region: process.env.AWS_REGION ?? "us-east-1",
+        endpoint: process.env.AWS_ENDPOINT_URL ?? "http://localhost:4566",
+        credentials: {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID ?? "test",
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ?? "test",
+        },
+      },
+);
 
 export async function queueUrl(name: string): Promise<string> {
   const res = await sqs.send(new GetQueueUrlCommand({ QueueName: name }));

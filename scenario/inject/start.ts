@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { LOG_FILE, PID_FILE, STATE_DIR, queueUrl } from "./aws.js";
+import { LOG_FILE, PID_FILE, STATE_DIR, queueUrl, realAws } from "./aws.js";
 
 const isRunning = (pid: number) => {
   try {
@@ -28,7 +28,12 @@ mkdirSync(STATE_DIR, { recursive: true });
 const out = openSync(LOG_FILE, "a");
 const child = spawn(
   process.execPath,
-  ["--import", "tsx", fileURLToPath(new URL("traffic.ts", import.meta.url))],
+  [
+    "--import",
+    "tsx",
+    fileURLToPath(new URL("traffic.ts", import.meta.url)),
+    ...(realAws ? ["--real-aws"] : []),
+  ],
   { detached: true, stdio: ["ignore", out, out], env: process.env },
 );
 child.unref();

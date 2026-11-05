@@ -5,15 +5,17 @@
 // - Pings are answered first, with the highest sequence processed.
 // - Reconnects with backoff, resuming from the cursor. Stops for good on `taken_over`,
 //   `closed`, and refusals that retrying can't fix.
+// - Before each reconnect it re-resolves the bridge URL (a local Switch server can move
+//   ports when it restarts) and emits `rebased` if it changed.
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import WebSocket from "ws";
 import { log } from "../log.js";
+import { stateFile } from "../stateDir.js";
 import { wsUrl } from "./config.js";
 
-const STATE_DIR = new URL("../../../.state/", import.meta.url);
-const STATE_FILE = new URL("switch-connection.json", STATE_DIR);
+const STATE_FILE = () => stateFile("switch-connection.json");
 const CLIENT_VERSION = "0.1.0";
 
 export interface MessagePayload {
@@ -54,6 +56,10 @@ export interface ConnectionEvents {
   /** Every domain event, addressed or not, for logging and context. */
   event: [event: DomainEvent];
   stopped: [reason: string];
+  /** The bridge URL changed (e.g. Switch Console restarted on new ports). */
+  rebased: [baseUrl: string];
+  /** The socket closed; it will reconnect unless stopped. */
+  disconnected: [];
 }
 
 const FATAL_EVICTIONS = new Set(["taken_over", "closed"]);
@@ -70,10 +76,11 @@ export class SwitchConnection extends EventEmitter<ConnectionEvents> {
   private reconnectTimer?: NodeJS.Timeout;
 
   constructor(
-    private readonly baseUrl: string,
+    private baseUrl: string,
     private readonly agentId: string,
     private readonly apiKey: string,
     private readonly roomId: string,
+    private readonly resolveBase?: () => Promise<string>,
   ) {
     super();
     const saved = this.load();
@@ -84,7 +91,7 @@ export class SwitchConnection extends EventEmitter<ConnectionEvents> {
 
   start(): void {
     this.stopped = false;
-    this.open();
+    void this.open();
   }
 
   stop(reason = "stopped"): void {
@@ -95,7 +102,20 @@ export class SwitchConnection extends EventEmitter<ConnectionEvents> {
     this.emit("stopped", reason);
   }
 
-  private open(): void {
+  private async open(): Promise<void> {
+    if (this.attempt > 0 && this.resolveBase) {
+      try {
+        const base = await this.resolveBase();
+        if (base !== this.baseUrl) {
+          log("warn", `Switch moved: ${this.baseUrl} → ${base}`);
+          this.baseUrl = base;
+          this.emit("rebased", base);
+        }
+      } catch {
+        // Still unreachable; keep the old URL and let the backoff continue.
+      }
+      if (this.stopped) return;
+    }
     const params = new URLSearchParams({
       connection_id: this.connectionId,
       rooms: this.roomId,
@@ -131,7 +151,11 @@ export class SwitchConnection extends EventEmitter<ConnectionEvents> {
       switch (frame.event) {
         case "connection_state":
           this.generation = Number(frame.data.generation);
-          if (typeof frame.data.cursor === "number") this.cursor = frame.data.cursor;
+          // Event ids are resume tickets (protocol 9); this legacy field is 0 for a stream that
+          // reads the conversation, so it must never wind a saved ticket back.
+          if (typeof frame.data.cursor === "number" && frame.data.cursor > (this.cursor ?? 0)) {
+            this.cursor = frame.data.cursor;
+          }
           this.save();
           log("info", "connected", {
             rooms: frame.data.rooms,
@@ -178,6 +202,7 @@ export class SwitchConnection extends EventEmitter<ConnectionEvents> {
       clearTimeout(this.stableTimer);
       const reason = reasonBuf.toString();
       if (this.stopped) return;
+      this.emit("disconnected");
 
       if (evictedCode && FATAL_EVICTIONS.has(evictedCode)) {
         log("error", `not reconnecting after eviction "${evictedCode}"`);
@@ -196,22 +221,21 @@ export class SwitchConnection extends EventEmitter<ConnectionEvents> {
         "warn",
         `disconnected (${code}${reason ? ` ${reason}` : ""}); retrying in ${Math.round(delay / 1000)}s`,
       );
-      this.reconnectTimer = setTimeout(() => this.open(), delay);
+      this.reconnectTimer = setTimeout(() => void this.open(), delay);
     });
   }
 
   private load(): SavedState | undefined {
-    if (!existsSync(STATE_FILE)) return undefined;
+    if (!existsSync(STATE_FILE())) return undefined;
     try {
-      return JSON.parse(readFileSync(STATE_FILE, "utf8")) as SavedState;
+      return JSON.parse(readFileSync(STATE_FILE(), "utf8")) as SavedState;
     } catch {
       return undefined;
     }
   }
 
   private save(): void {
-    mkdirSync(STATE_DIR, { recursive: true });
     const state: SavedState = { connectionId: this.connectionId, cursor: this.cursor };
-    writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    writeFileSync(STATE_FILE(), JSON.stringify(state, null, 2));
   }
 }

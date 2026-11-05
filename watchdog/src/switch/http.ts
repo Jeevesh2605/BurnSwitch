@@ -11,12 +11,42 @@ export class SwitchHttpError extends Error {
   }
 }
 
+/** Network trouble or a connection that isn't open yet: retrying later can succeed. */
+export function isTransient(err: unknown): boolean {
+  if (err instanceof SwitchHttpError) {
+    return err.status >= 500 || (err.status === 409 && /not open/.test(err.detail));
+  }
+  return err instanceof TypeError || (err as Error)?.name === "TimeoutError"; // fetch failed
+}
+
+const WRITES = new Set([
+  "post_message",
+  "send_targeted_message",
+  "create_room_document",
+  "update_room_document",
+  "delete_room_document",
+]);
+
+function dryResult(name: string, args: Record<string, unknown>) {
+  const body = String(args.body ?? args.content ?? args.name ?? "").replace(/\n/g, " ⏎ ");
+  console.log(`[dry-run] ${name}: ${body.slice(0, 160)}`);
+  return {
+    event_id: `dry-${Date.now()}`,
+    target_statuses: {},
+    document_id: String(args.document_id ?? "dry-doc"),
+    status: "ok",
+  };
+}
+
 export class SwitchHttp {
   /** Set once the WebSocket is open; binds operations to the room the connection claimed. */
   connectionId?: string;
 
+  /** Calls that would post or change something in the room are only logged (tests). */
+  dryRun = false;
+
   constructor(
-    readonly baseUrl: string,
+    public baseUrl: string,
     readonly agentId: string,
     private readonly apiKey: string,
   ) {}
@@ -46,6 +76,7 @@ export class SwitchHttp {
 
   /** POST /agents/{id}/ops/{name} with the arguments unwrapped in the body. */
   async op<T = unknown>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+    if (this.dryRun && WRITES.has(name)) return dryResult(name, args) as T;
     const res = await this.request<{ result: T }>(
       "POST",
       `/agents/${this.agentId}/ops/${name}`,
@@ -57,6 +88,7 @@ export class SwitchHttp {
 
   /** POST /agents/{id}/message: posts to a room without needing a connection. No addressing. */
   async postMessage(roomId: string, content: string): Promise<{ event_id: string }> {
+    if (this.dryRun) return dryResult("post message", { room_id: roomId, body: content }) as never;
     return this.request(
       "POST",
       `/agents/${this.agentId}/message`,

@@ -6,11 +6,12 @@
 import "../env.js";
 import { existsSync, readFileSync } from "node:fs";
 import { requireEnv } from "../env.js";
+import { stateFile } from "../stateDir.js";
 import { resolveBridgeUrl } from "../switch/config.js";
 import { SwitchHttp } from "../switch/http.js";
 import { LEDGER_NAME } from "./ledger.js";
 
-const conn = new URL("../../../.state/switch-connection.json", import.meta.url);
+const conn = stateFile("switch-connection.json");
 if (!existsSync(conn)) {
   console.error("No watchdog connection yet: start the watchdog once (npm run watchdog:dev).");
   process.exit(1);

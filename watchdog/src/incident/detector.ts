@@ -60,6 +60,13 @@ export interface Incident {
   infra?: InfraSnapshot;
 }
 
+export interface OutboxItem {
+  kind: "alert" | "update";
+  incidentId: string;
+  body: string;
+  queuedAt: string;
+}
+
 export interface DetectorState {
   healthy: { at: string; usdPerHr: number; invocationsPerMin: number }[];
   breachStreak: number;
@@ -69,6 +76,8 @@ export interface DetectorState {
   closed: Incident[];
   ledger?: { documentId?: string; syncedKey?: string };
   runbook?: { documentId: string; hash: string };
+  /** Room posts that couldn't be sent (Switch unreachable); sent in order on reconnect. */
+  outbox?: OutboxItem[];
 }
 
 export type DetectorEvent =

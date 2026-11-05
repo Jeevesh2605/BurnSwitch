@@ -85,6 +85,16 @@ Create it like @claude-code, with these differences:
 
 ## 6. Run the incident
 
+The easy way: one command that checks everything, starts a clean run and tells you what to do at each act.
+
+```bash
+npm run rehearse
+```
+
+`npm run preflight` runs the checks on their own: Docker, prices, Switch, which agents are in the room, and whether the room instructions match `room/instructions.md`.
+
+By hand:
+
 ```bash
 npm run scenario:reset -- --fresh   # clean LocalStack + buggy worker (restores the scenario-start tag)
 npm run watchdog:dev                # if it isn't running already
@@ -103,6 +113,23 @@ What should happen:
 
 Afterwards: `npm run ledger:show` prints the full ledger.
 
+## Real AWS (optional)
+
+Everything runs in LocalStack by default. To run the same scenario in your own AWS account, add `--real-aws` to each command:
+
+```bash
+npm run scenario:up -- --real-aws        # shows the account + what it creates; type the account id to go on
+npm run watchdog:dev -- --real-aws
+npm run burn:start -- --real-aws
+npm run rehearse -- --real-aws           # or all of it at once
+npm run scenario:down -- --real-aws      # removes the Lambda, mapping, log group and role
+```
+
+- Credentials: your normal AWS CLI setup, or `REAL_AWS_PROFILE` in `.env`. The dummy `test` keys for LocalStack are ignored in this mode.
+- @claude-code's `bin/` helpers follow the target that `scenario:up` last used. In real mode, each call prints a ⚠️ REAL AWS banner, and the approval requests in the room show it too.
+- Queues are never deleted by these scripts (they hold messages). `scenario:down` prints the two `aws sqs delete-queue` commands for you to run once you've checked them.
+- The prices in `config/pricing.json` are for us-east-1. The watchdog warns if `AWS_REGION` is different.
+
 ## Troubleshooting
 
 | Symptom                                                     | Fix                                                                                                                                                                                  |
@@ -112,4 +139,5 @@ Afterwards: `npm run ledger:show` prints the full ledger.
 | @claude-code never asks for approval and just runs commands | Auto mode or Bypass permissions is on. Turn both off on its page (**General**), then send `!reset @claude-code`.                                                                     |
 | Nobody answers in Telegram                                  | The Telegram bridge stopped (often after a network timeout). Use **Connectors → Telegram → ⋮ → Disconnect app…** and connect again.                                                  |
 | Watchdog can't reach Switch                                 | Switch Console may have moved ports after a restart. The watchdog re-reads them; restart it.                                                                                         |
+| The watchdog says "Switch moved"                            | Switch Console restarted on new ports; the watchdog found them by itself. Nothing to do.                                                                                             |
 | `docker compose` says Docker Desktop is paused              | Resume it from the whale menu.                                                                                                                                                       |

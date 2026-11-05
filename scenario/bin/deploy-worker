@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Builds scenario/order-worker and deploys it to the order-worker Lambda (LocalStack).
+# Builds scenario/order-worker and deploys it to the order-worker Lambda (LocalStack, or real
+# AWS if scenario:up ran with --real-aws).
 # A live change: run it only after the on-call human approves in the room.
+export BURNSWITCH_FOLLOW_TARGET=1 # act where scenario:up put the scenario (.state/target)
 source "$(dirname "$0")/../infra/lib.sh" "$@"
 deploy_worker
 awsl lambda get-function-configuration --function-name "$FUNCTION" \

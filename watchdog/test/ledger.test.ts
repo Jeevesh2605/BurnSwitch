@@ -4,7 +4,8 @@ import type { DeployManifest, Thresholds } from "../src/config.js";
 import { burnOf } from "../src/cost/model.js";
 import { Detector } from "../src/incident/detector.js";
 import { infraChanges, noteApproval, parseApproval, track } from "../src/incident/timeline.js";
-import { ledgerKey, renderLedger } from "../src/ledger/ledger.js";
+import { ledgerKey, parseStateMarker, renderLedger } from "../src/ledger/ledger.js";
+import { SwitchHttpError, isTransient } from "../src/switch/http.js";
 import type { Sample } from "../src/metrics/types.js";
 
 const rates = { lambda_requests_usd_per_million: 1, lambda_gb_second_usd: 0.001 };
@@ -152,4 +153,35 @@ test("parseApproval", () => {
     action: "aws sqs set-queue-attributes",
   });
   assert.equal(parseApproval("I approve of this plan"), undefined);
+});
+
+test("the ledger carries the incident state, so a lost .state/ resumes it", () => {
+  const d = new Detector(t, { usdPerHr: 1, invocationsPerMin: 120 });
+  step(d, storm());
+  step(d, storm());
+  const inc = d.state.incident!;
+  const doc = renderLedger(d.state, deploy, t, new Date(clock).toISOString());
+  const back = parseStateMarker(doc)!;
+  assert.equal(back.incident?.id, inc.id);
+  assert.equal(back.incident?.handoffSent, inc.handoffSent);
+  assert.equal(parseStateMarker("# no marker here"), undefined);
+
+  // A detector restored from it does not open a second incident for the same storm.
+  const restored = new Detector(
+    t,
+    { usdPerHr: 1, invocationsPerMin: 120 },
+    {
+      ...d.state,
+      ...back,
+      healthy: [],
+    },
+  );
+  assert.deepEqual(restored.observe(storm(), burnOf(storm(), rates)), []);
+});
+
+test("isTransient: retry on network trouble, not on refusals", () => {
+  assert.equal(isTransient(new TypeError("fetch failed")), true);
+  assert.equal(isTransient(new SwitchHttpError(503, "", "x")), true);
+  assert.equal(isTransient(new SwitchHttpError(409, "connection abc is not open", "x")), true);
+  assert.equal(isTransient(new SwitchHttpError(400, "Targets not in room", "x")), false);
 });

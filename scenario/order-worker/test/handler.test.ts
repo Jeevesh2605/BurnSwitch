@@ -26,5 +26,29 @@ test("handler processes a batch of valid orders", async () => {
       record({ orderId: "o-1", customerId: "c-1", items: [{ sku: "A", qty: 1, unitPrice: 5 }] }),
     ],
   };
-  await assert.doesNotReject(handler(event));
+  assert.deepEqual(await handler(event), { batchItemFailures: [] });
+});
+
+test("malformed order fails alone, fast, without retries", async () => {
+  const event: SQSEvent = {
+    Records: [
+      record({ orderId: "o-1", customerId: "c-1", items: [{ sku: "A", qty: 1, unitPrice: 5 }] }, "good"),
+      record(
+        {
+          orderId: "o-2",
+          customerId: "c-2",
+          lineItems: [{ sku: "B", qty: 1, unitPrice: 29.99 }],
+          source: "checkout-v2",
+        },
+        "bad-v2",
+      ),
+      { ...record({}, "bad-json"), body: "{not json" },
+    ],
+  };
+  const t0 = Date.now();
+  const res = await handler(event);
+  assert.deepEqual(res, {
+    batchItemFailures: [{ itemIdentifier: "bad-v2" }, { itemIdentifier: "bad-json" }],
+  });
+  assert.ok(Date.now() - t0 < 900, "validation errors must not be retried with backoff");
 });

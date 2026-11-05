@@ -2,7 +2,7 @@
 
 Published in #finops-control as a room document by @burn-watchdog (source: `room/finops-runbook.md` in the BurnSwitch repo).
 
-All commands run from the `scenario/` folder. `bin/aws-local` is the AWS CLI pointed at the demo's LocalStack "production". It refuses purge and delete commands. Every command marked **LIVE** changes production and needs jeevesh2605's approval in the room. Run it only after they ask, with one command per approval.
+All commands run from the `scenario/` folder. `bin/aws-local` is the AWS CLI pointed at the demo's "production": LocalStack by default. If the scenario was started with `--real-aws`, it targets the real account and prints a ⚠️ REAL AWS banner on every call; then the queue URL and DLQ ARN below differ, so look them up first with `bin/aws-local sqs get-queue-url --queue-name orders` and `bin/aws-local sqs get-queue-attributes --queue-url <url of orders-dlq> --attribute-names QueueArn`. It refuses purge and delete commands. Every command marked **LIVE** changes production and needs jeevesh2605's approval in the room. Run it only after they ask, with one command per approval.
 
 ## 1. What the alert means
 

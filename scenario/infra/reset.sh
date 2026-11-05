@@ -10,6 +10,10 @@ cd "$ROOT"
 
 FRESH=false
 for arg in "$@"; do [[ "$arg" == "--fresh" ]] && FRESH=true; done
+if $FRESH && $REAL_AWS; then
+  echo "--fresh restarts LocalStack; it can't be used with --real-aws (nothing is ever purged)." >&2
+  exit 1
+fi
 
 if git rev-parse -q --verify "refs/tags/scenario-start" >/dev/null; then
   echo "Restoring scenario/order-worker from tag scenario-start (local edits there are overwritten)."
