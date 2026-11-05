@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Builds scenario/order-worker and deploys it to the order-worker Lambda (LocalStack).
+# A live change: run it only after the on-call human approves in the room.
+source "$(dirname "$0")/../infra/lib.sh" "$@"
+deploy_worker
+awsl lambda get-function-configuration --function-name "$FUNCTION" \
+  --query '{function: FunctionName, codeSha256: CodeSha256, lastModified: LastModified}'

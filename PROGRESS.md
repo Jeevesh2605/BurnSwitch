@@ -57,17 +57,19 @@
 - [x] Rewritten only when an incident changes: every document update also posts a "📄 updated room document" notice in the room, so no timer refresh
 - [x] Approver fields: **TODO kept in the ledger.** Approvals (`answered_by`) are not readable by agents. The ledger records "Approved by <name>: <action>" lines posted in the room (by @claude-code, per Phase 5 instructions), with who reported each one
 - [x] Unit tests: `watchdog/test/ledger.test.ts`
-- [ ] **CHECKPOINT 4:** ledger visible in the room and updates live — 2026-11-05 run: created at start, updated 6 times (opened, concurrency 0, contained, redrive + unpause, resolved); time to contain 1m 15s, peak $0.100/hr (10.9×), 182 messages kept in the DLQ. Waiting for you to check it in the room
+- [x] **CHECKPOINT 4:** ledger visible in the room and updates live — confirmed 2026-11-05 (`!list-documents` in Telegram lists it; `npm run ledger:show` prints it). 2026-11-05 run: created at start, updated 6 times (opened, concurrency 0, contained, redrive + unpause, resolved); time to contain 1m 15s, peak $0.100/hr (10.9×), 182 messages kept in the DLQ.
 - Runbook note for Phase 5: adding redrive *without* ReportBatchItemFailures dead-letters good orders that shared a batch with a poison one (182 in the DLQ in this run). Enable partial batch failures first, then redrive
 
 ## Phase 5 — Room material and agent instructions
 
-- [ ] `room/instructions.md`
-- [ ] `room/finops-runbook.md`
-- [ ] `room/agents/claude-code.md`
-- [ ] `room/agents/finops-auditor.md`
-- [ ] `docs/setup.md`
-- [ ] **CHECKPOINT 5**
+- [x] `room/instructions.md` (paste into Console → room → Configuration → Instructions)
+- [x] `room/finops-runbook.md`, published by the watchdog as the `finops-runbook.md` room document (attaching library documents needs the Gateway web page, which the local server lacks)
+- [x] `room/agents/claude-code.md` (paste into the agent's **Agent instructions**)
+- [x] `room/agents/finops-auditor.md`
+- [x] `docs/setup.md` (Telegram only)
+- [x] `scenario/bin/`: `aws-local` (LocalStack AWS CLI, refuses purge/delete), `repro` (handler in a node:22 container on `order-worker/repro/poison-batch.json`), `deploy-worker`
+- [x] Scenario scripts load only `AWS_*` from `.env`, so @claude-code never holds the Switch key
+- [ ] **CHECKPOINT 5:** you do the manual Console setup (`docs/setup.md` steps 2, 4, 5); I help debug
 
 ## Phase 6 — Rehearsal and hardening
 
@@ -90,7 +92,7 @@
 
 ## Notes from the Switch docs (verified 2026-11-04)
 
-- Room documents can't be opened from Telegram; people see them via `!list-documents`, Switch Console or the Gateway.
+- Room documents can't be opened from Telegram, and Switch Console (v0.40.1) doesn't show a Telegram room's chat. Read the ledger with `npm run ledger:show` (Console's room Configuration tab doesn't list documents); `!list-documents` in Telegram lists it.
 - Every `create_room_document` / `update_room_document` posts a "📄 created/updated room document" notice in the room (switch-core 0.31.0, not configurable). Document names are unique per room.
 - Addressing another agent: use `send_targeted_message` (`target_names`), not an `@name` inside `post_message`.
 - `create_room_document` / `update_room_document` need a connection bound to the room (connection id header).

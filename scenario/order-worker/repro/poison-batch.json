@@ -1,0 +1,18 @@
+{
+  "Records": [
+    {
+      "messageId": "2b6f0c1e-normal",
+      "receiptHandle": "rh-1",
+      "body": "{\"orderId\":\"ord-1a2b3c4d\",\"customerId\":\"cus-412\",\"items\":[{\"sku\":\"SKU-BLUE-MUG\",\"qty\":2,\"unitPrice\":12}]}",
+      "attributes": { "ApproximateReceiveCount": "14" },
+      "eventSourceARN": "arn:aws:sqs:us-east-1:000000000000:orders"
+    },
+    {
+      "messageId": "9d41e7a0-checkout-v2",
+      "receiptHandle": "rh-2",
+      "body": "{\"orderId\":\"ord-9f8e7d6c\",\"customerId\":\"cus-288\",\"lineItems\":[{\"sku\":\"SKU-RED-TEE\",\"qty\":1,\"unitPrice\":29.99}],\"source\":\"checkout-v2\"}",
+      "attributes": { "ApproximateReceiveCount": "14" },
+      "eventSourceARN": "arn:aws:sqs:us-east-1:000000000000:orders"
+    }
+  ]
+}

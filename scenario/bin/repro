@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Reproduces the incident locally: builds the worker and runs its handler in a throwaway
+# node:22 container (same runtime as the Lambda) on a recorded batch: one normal order and
+# one checkout-v2 order. Touches nothing live. Usage: bin/repro [event.json]
+source "$(dirname "$0")/../infra/lib.sh"
+EVENT="${1:-$WORKER_DIR/repro/poison-batch.json}"
+build_worker >/dev/null
+echo "Running handler on $(basename "$EVENT") in node:22-alpine ..."
+docker run --rm -v "$WORKER_DIR/dist:/task:ro" -v "$(cd "$(dirname "$EVENT")" && pwd)/$(basename "$EVENT"):/event.json:ro" \
+  node:22-alpine node --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    const { handler } = await import("/task/handler.js");
+    const event = JSON.parse(readFileSync("/event.json", "utf8"));
+    const t0 = Date.now();
+    try {
+      const res = await handler(event);
+      console.log(`RESULT ok in ${Date.now() - t0} ms:`, JSON.stringify(res ?? null));
+    } catch (err) {
+      console.log(`RESULT threw after ${Date.now() - t0} ms: ${err.stack.split("\n").slice(0, 3).join("\n  ")}`);
+      console.log("Lambda would fail the WHOLE batch: every message in it goes back on the queue.");
+      process.exitCode = 1;
+    }'

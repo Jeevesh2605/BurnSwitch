@@ -68,6 +68,7 @@ export interface DetectorState {
   incident?: Incident;
   closed: Incident[];
   ledger?: { documentId?: string; syncedKey?: string };
+  runbook?: { documentId: string; hash: string };
 }
 
 export type DetectorEvent =

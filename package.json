@@ -20,7 +20,8 @@
     "switch:registration-key": "tsx scripts/console-registration-key.ts",
     "watchdog:test": "node --import tsx --test watchdog/test/*.test.ts",
     "test": "npm run -s scenario:test && npm run -s watchdog:test",
-    "metrics:record": "tsx watchdog/src/metrics/record.ts"
+    "metrics:record": "tsx watchdog/src/metrics/record.ts",
+    "ledger:show": "tsx watchdog/src/ledger/show.ts"
   },
   "license": "MIT",
   "type": "module",

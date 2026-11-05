@@ -3,7 +3,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-if [[ -f "$ROOT/.env" ]]; then set -a; source "$ROOT/.env"; set +a; fi
+# Only the AWS_* settings from .env: these scripts are also run by @claude-code, which has
+# no business holding the Switch API key. (docker compose reads .env by itself.)
+if [[ -f "$ROOT/.env" ]]; then
+  while IFS= read -r line; do export "${line?}"; done < <(grep -E '^AWS_[A-Z_]+=' "$ROOT/.env")
+fi
 
 for arg in "$@"; do
   if [[ "$arg" == "--real-aws" ]]; then

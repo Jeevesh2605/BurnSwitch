@@ -13,6 +13,7 @@ import { alertText, containedText, resolvedText } from "./incident/messages.js";
 import { loadState, saveState } from "./incident/store.js";
 import { noteApproval, parseApproval, track } from "./incident/timeline.js";
 import { Ledger, renderLedger } from "./ledger/ledger.js";
+import { publishRunbook } from "./ledger/runbook.js";
 import { log } from "./log.js";
 import { createAdapter, type Sample } from "./metrics/index.js";
 import { resolveBridgeUrl } from "./switch/config.js";
@@ -71,10 +72,10 @@ async function syncLedger(force = false): Promise<void> {
 
 conn.on("ready", () => {
   connected = true;
-  // Once per process: make sure the ledger exists and shows the current state.
+  // Once per process: publish the runbook, and create the ledger if it doesn't exist yet.
   if (!ledgerChecked) {
     ledgerChecked = true;
-    void syncLedger(true);
+    void publishRunbook(http, agentId, detector.state).then(() => syncLedger());
   }
 });
 

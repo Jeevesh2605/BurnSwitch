@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# AWS CLI against LocalStack (the demo's "production"). Same arguments as `aws`.
+#   bin/aws-local lambda put-function-concurrency --function-name order-worker --reserved-concurrent-executions 0
+# Refuses commands that purge queues or delete messages (room rule 1).
+source "$(dirname "$0")/../infra/lib.sh" "$@"
+args=" $* "
+for banned in " purge-queue " " delete-message " " delete-message-batch " " delete-queue "; do
+  if [[ "$args" == *"$banned"* ]]; then
+    echo "aws-local: refusing '${banned// /}': never purge queues or delete messages (room rule 1)." >&2
+    exit 2
+  fi
+done
+awsl "$@"
