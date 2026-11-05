@@ -17,6 +17,8 @@ import {
 } from "./incident/detector.js";
 import { alertText, containedText, resolvedText } from "./incident/messages.js";
 import { hasState, loadState, saveState } from "./incident/store.js";
+import { loadChanges } from "./incident/changes.js";
+import { readTrafficStats, reconcile, reconciliationLine } from "./incident/reconcile.js";
 import { noteApproval, parseApproval, track } from "./incident/timeline.js";
 import { Ledger, renderLedger, restoreFromLedger } from "./ledger/ledger.js";
 import { publishRunbook } from "./ledger/runbook.js";
@@ -123,7 +125,21 @@ conn.on("ready", () => {
 });
 
 // Approvals, as reported in the room: "Approved by <name>: <action>". Any sender but us.
-const AFTER_RESOLVE_MS = 10 * 60_000;
+const pendingApprovals: {
+  approval: { by: string; action: string };
+  sender: string;
+  id: string;
+  ts: number;
+}[] = [];
+function attachPendingApprovals(inc: Incident): void {
+  const since = Date.parse(inc.openedAt) - 10 * 60_000;
+  for (const a of pendingApprovals.splice(0)) {
+    if (a.ts < since) continue;
+    noteApproval(inc, a.approval, a.sender, a.id, new Date(a.ts).toISOString());
+    log("info", `ledger: attached ${a.approval.by}'s earlier approval to ${inc.id}`);
+  }
+}
+const AFTER_RESOLVE_MS = 30 * 60_000; // approvals for late steps (4e) still count
 function incidentAt(ms: number): Incident | undefined {
   const all = [
     ...(detector.state.incident ? [detector.state.incident] : []),
@@ -132,7 +148,8 @@ function incidentAt(ms: number): Incident | undefined {
   return all.find(
     (i) =>
       Date.parse(i.openedAt) <= ms &&
-      ms <= (i.resolvedAt ? Date.parse(i.resolvedAt) + AFTER_RESOLVE_MS : Infinity),
+      ms <= (i.resolvedAt ? Date.parse(i.resolvedAt) + AFTER_RESOLVE_MS : Infinity) &&
+      !(i.abandonedAt && ms > Date.parse(i.abandonedAt)),
   );
 }
 conn.on("event", (ev) => {
@@ -143,12 +160,17 @@ conn.on("event", (ev) => {
     message_id: string;
     timestamp: number;
   };
-  if (p.sender_name === "burn-watchdog" || typeof p.body !== "string") return;
+  // The watchdog itself and the auditor (which quotes approvals in its report) don't approve.
+  if (["burn-watchdog", "finops-auditor"].includes(p.sender_name) || typeof p.body !== "string")
+    return;
   const approval = parseApproval(p.body);
   if (!approval) return;
   const inc = incidentAt(p.timestamp);
   if (!inc) {
-    log("info", `approval by ${approval.by} outside any incident; not recorded`);
+    // Kept for 10 min: if an incident opens right after (the command came before the alert),
+    // it's attached to that incident instead of being lost.
+    pendingApprovals.push({ approval, sender: p.sender_name, id: p.message_id, ts: p.timestamp });
+    log("info", `approval by ${approval.by} before any incident; held for 10 min`);
     return;
   }
   if (
@@ -261,6 +283,7 @@ function handle(ev: DetectorEvent, s: Sample, b: Burn): void {
   const inc = ev.incident;
   if (ev.type === "opened") {
     log("warn", `INCIDENT ${inc.id} opened at ${usd(b.usdPerHr)}/hr`);
+    attachPendingApprovals(inc);
     if (inc.handoffSent) return;
     // Loop guard: mark first and persist, so a crash or retry can never address twice.
     inc.handoffSent = true;
@@ -272,6 +295,78 @@ function handle(ev: DetectorEvent, s: Sample, b: Burn): void {
     "update",
     inc,
     ev.type === "contained" ? containedText(inc, s, b) : resolvedText(inc, s, b, thresholds),
+  );
+}
+
+// ---- Message count -----------------------------------------------------------------------
+// At resolve the count is a snapshot (traffic may still run). Once the traffic generator has
+// stopped and the queue has been empty for 2 samples, the final count goes in the ledger and
+// as a reply under the alert.
+
+async function countMessages(s: Sample) {
+  try {
+    return await reconcile(thresholds.function, s);
+  } catch (err) {
+    log("warn", `message count failed: ${(err as Error).message}`);
+    return undefined;
+  }
+}
+
+/**
+ * "After" burn: only once the backlog has drained (≤ 20 queued, no errors) with traffic still
+ * running, for a whole metrics window. Measured right at resolve it still includes the drain.
+ */
+function measureAfter(s: Sample, b: Burn): void {
+  const inc = awaitingFinalCount();
+  if (!inc || inc.afterUsdPerHr != null) return;
+  const drained =
+    readTrafficStats()?.running === true &&
+    s.queueVisible + s.queueInFlight <= 20 &&
+    b.errorRate === 0;
+  if (!drained) {
+    inc.drainedSince = undefined;
+    return;
+  }
+  inc.drainedSince ??= s.at;
+  if (Date.parse(s.at) - Date.parse(inc.drainedSince) < thresholds.window_s * 1000) return;
+  inc.afterUsdPerHr = b.usdPerHr;
+  inc.afterAt = s.at;
+  inc.timeline.push({
+    at: s.at,
+    kind: "event",
+    text: `After burn measured: ${usd(b.usdPerHr)}/hr (backlog drained, normal traffic)`,
+  });
+  log("info", `after burn for ${inc.id}: ${usd(b.usdPerHr)}/hr`);
+}
+
+/** The last closed incident, while its final count isn't in (it still records late actions). */
+function awaitingFinalCount(): Incident | undefined {
+  const inc = detector.state.closed.at(-1);
+  if (!inc?.reconciliation || inc.reconciliation.final || !inc.resolvedAt) return undefined;
+  return Date.now() - Date.parse(inc.resolvedAt) < 3_600_000 ? inc : undefined;
+}
+
+async function finalCount(s: Sample): Promise<void> {
+  const inc = detector.state.closed.at(-1);
+  if (!inc?.reconciliation || inc.reconciliation.final || !inc.resolvedAt) return;
+  if (Date.now() - Date.parse(inc.resolvedAt) > 3_600_000) return; // gave up after an hour
+  const idle = !readTrafficStats()?.running && s.queueVisible === 0 && s.queueInFlight === 0;
+  inc.reconcileIdle = idle ? (inc.reconcileIdle ?? 0) + 1 : 0;
+  if (inc.reconcileIdle < 2) return;
+  const r = await countMessages(s);
+  if (!r?.final) return;
+  inc.reconciliation = r;
+  const line = reconciliationLine(r);
+  inc.timeline.push({
+    at: s.at,
+    kind: "event",
+    text: `Final count: ${line.replace(/^• Count: /, "")}`,
+  });
+  log("info", `final count for ${inc.id}: ${line}`);
+  enqueue(
+    "update",
+    inc,
+    [`📊 ${inc.id} final count`, line, ...r.notes.map((n) => `• ${n}`)].join("\n"),
   );
 }
 
@@ -289,7 +384,16 @@ async function tick(): Promise<void> {
     const b = burnOf(s, pricing);
     last = { sample: s, burn: b };
     const events = detector.observe(s, b);
-    track(detector.state.incident, events, s, b, thresholds.sample_interval_s);
+    track(
+      detector.state.incident ?? awaitingFinalCount(),
+      events,
+      s,
+      b,
+      thresholds.sample_interval_s,
+      loadChanges(),
+    );
+    const resolved = events.find((e) => e.type === "resolved")?.incident;
+    if (resolved) resolved.reconciliation = await countMessages(s);
     saveState(detector.state);
     const inc = detector.state.incident;
     log(
@@ -302,6 +406,8 @@ async function tick(): Promise<void> {
           : ` | baseline ${usd(detector.baseline(Date.now()).usdPerHr)}/hr`),
     );
     for (const ev of events) handle(ev, s, b);
+    measureAfter(s, b);
+    await finalCount(s);
     if (connected) await flushOutbox();
     else if (detector.state.outbox?.length) log("warn", "not connected to Switch; posts queued");
     saveState(detector.state);

@@ -5,6 +5,7 @@
 //   - approvals, as reported in the room (see parseApproval)
 import { usd, type Burn } from "../cost/model.js";
 import type { Sample } from "../metrics/types.js";
+import { attribute, type ChangeCategory, type ChangeRecord } from "./changes.js";
 import type { DetectorEvent, Incident, InfraSnapshot, TimelineEntry } from "./detector.js";
 
 const snapshot = (s: Sample): InfraSnapshot => ({
@@ -18,38 +19,45 @@ const snapshot = (s: Sample): InfraSnapshot => ({
 const conc = (n: number | null) => (n == null ? "unreserved" : String(n));
 
 /** Plain-language descriptions of what changed. Values a source can't see are skipped. */
-export function infraChanges(prev: InfraSnapshot, next: InfraSnapshot): string[] {
-  const out: string[] = [];
+export function infraChanges(
+  prev: InfraSnapshot,
+  next: InfraSnapshot,
+): { category: ChangeCategory; text: string }[] {
+  const out: { category: ChangeCategory; text: string }[] = [];
+  const push = (category: ChangeCategory, text: string) => out.push({ category, text });
   if (prev.reservedConcurrency !== next.reservedConcurrency) {
-    out.push(
+    push(
+      "concurrency",
       next.reservedConcurrency === 0
         ? "Reserved concurrency set to 0 (function paused; messages stay on the queue)"
         : `Reserved concurrency ${conc(prev.reservedConcurrency)} → ${conc(next.reservedConcurrency)}`,
     );
   }
   if (prev.redriveConfigured !== next.redriveConfigured) {
-    out.push(
+    push(
+      "redrive",
       next.redriveConfigured
         ? "Redrive policy added: failing messages now move to the DLQ"
         : "Redrive policy removed",
     );
   }
   if (prev.codeSha && next.codeSha && prev.codeSha !== next.codeSha) {
-    out.push(`New code deployed (CodeSha256 ${next.codeSha.slice(0, 12)}…)`);
+    push("code", `New code deployed (CodeSha256 ${next.codeSha.slice(0, 12)}…)`);
   }
   if (
     prev.partialBatchResponse !== undefined &&
     next.partialBatchResponse !== undefined &&
     prev.partialBatchResponse !== next.partialBatchResponse
   ) {
-    out.push(
+    push(
+      "mapping",
       next.partialBatchResponse
         ? "Partial batch failure reporting enabled (ReportBatchItemFailures)"
         : "Partial batch failure reporting disabled",
     );
   }
   if (prev.mappingState && next.mappingState && prev.mappingState !== next.mappingState) {
-    out.push(`Event source mapping ${prev.mappingState} → ${next.mappingState}`);
+    push("mapping", `Event source mapping ${prev.mappingState} → ${next.mappingState}`);
   }
   return out;
 }
@@ -68,6 +76,7 @@ export function track(
   s: Sample,
   b: Burn,
   intervalS: number,
+  changes: ChangeRecord[] = [],
 ): void {
   for (const ev of events) {
     const i = ev.incident;
@@ -85,23 +94,65 @@ export function track(
       );
       i.infra = snapshot(s);
       i.lastSampleAt = s.at;
+      // Already paused when the incident opened (e.g. an approval meant for an earlier
+      // incident): record that action here, and don't credit it as a time to contain.
+      if (s.reservedConcurrency === 0) {
+        const used = new Set(i.usedChanges ?? []);
+        const from = new Date(Date.parse(s.at) - 10 * 60_000).toISOString();
+        const rec = attribute("concurrency", from, s.at, changes, used);
+        i.timeline.push({
+          at: s.at,
+          kind: "action",
+          text: "Reserved concurrency was already 0 when this incident opened (paused before the alert)",
+          category: "concurrency",
+          source: rec?.source ?? "unknown",
+          command: rec?.command,
+          changedAt: rec?.at,
+        });
+        i.usedChanges = [...used];
+        i.containmentActionAt = rec?.at ?? s.at;
+        i.containedBeforeAlert = true;
+      }
     }
   }
 
-  // The open incident, or one that just resolved on this sample.
+  // The open incident, or one that just resolved, or (passed in by the caller) the last
+  // closed one whose final message count isn't in yet.
   const target = inc ?? events.find((e) => e.type === "resolved")?.incident;
   if (target && target.lastSampleAt && target.lastSampleAt !== s.at) {
     const dtS = Math.min(
       (Date.parse(s.at) - Date.parse(target.lastSampleAt)) / 1000,
       intervalS * 2,
     );
-    if (dtS > 0) {
+    // A resolved incident still gets its late actions (e.g. the redrive policy, which comes
+    // last), but no more spend.
+    const accrue =
+      target.status !== "resolved" ||
+      events.some((e) => e.type === "resolved" && e.incident === target);
+    if (dtS > 0 && accrue) {
       target.spendUsd += (b.usdPerHr * dtS) / 3600;
       target.excessUsd += (Math.max(0, b.usdPerHr - target.baselineUsdPerHr) * dtS) / 3600;
     }
+    const from = target.lastSampleAt;
     target.lastSampleAt = s.at;
     const next = snapshot(s);
-    for (const text of infraChanges(target.infra ?? next, next)) add(target, s.at, "action", text);
+    const used = new Set(target.usedChanges ?? []);
+    for (const c of infraChanges(target.infra ?? next, next)) {
+      const rec = attribute(c.category, from, s.at, changes, used);
+      if (c.category === "concurrency" && next.reservedConcurrency === 0) {
+        target.containmentActionAt ??= rec?.at ?? s.at;
+      }
+      target.timeline.push({
+        at: s.at,
+        kind: "action",
+        text: c.text,
+        category: c.category,
+        source: rec?.source ?? "unknown",
+        command: rec?.command,
+        changedAt: rec?.at,
+      });
+    }
+    target.usedChanges = [...used];
     target.infra = next;
   }
 
@@ -126,7 +177,9 @@ export function track(
  * (room instructions ask @claude-code to post this). Switch records who tapped Allow
  * (answered_by), but no agent operation returns it, so this line is the only source.
  */
-const APPROVAL = /approved by @?([\w.-]+)\s*[:—–-]\s*(.+)/i;
+// Only a line that starts with "Approved by" (after an emoji or bullet) counts, so a summary
+// that mentions approvals, like a post-mortem, isn't mistaken for one.
+const APPROVAL = /^[^\p{L}\p{N}@]*approved by @?([\w.-]+)\s*[:—–-]\s*(.+)/imu;
 
 export function parseApproval(body: string): { by: string; action: string } | undefined {
   const m = APPROVAL.exec(body);

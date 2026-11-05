@@ -10,6 +10,7 @@ cd "$ROOT"
 
 if ! $REAL_AWS; then
   docker compose rm -sf localstack
+  rm -f "$ROOT/.state/traffic-stats.json"
   echo local >"$ROOT/.state/target" 2>/dev/null || true
   echo "LocalStack stopped. Its queues and messages went with it (state isn't persisted)."
   exit 0

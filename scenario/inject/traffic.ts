@@ -5,6 +5,7 @@
 import { SendMessageCommand } from "@aws-sdk/client-sqs";
 import { sqs, queueUrl } from "./aws.js";
 import { normalOrder, poisonOrder } from "./orders.js";
+import { loadStats, saveStats } from "./stats.js";
 
 const RPS = Number(process.env.TRAFFIC_RPS ?? 2);
 const POISON_COUNT = Number(process.env.POISON_COUNT ?? 5);
@@ -22,23 +23,58 @@ log(
     `then ${Math.round(POISON_RATE * 100)}% of orders malformed`,
 );
 
+// Counts only what SQS accepted, so the reconciliation is exact.
+const stats = loadStats();
+stats.running = true;
+stats.runs.push({ startedAt: new Date().toISOString() });
+saveStats(stats);
+const counted = (bad: boolean) => {
+  if (bad) stats.malformed += 1;
+  else stats.normal += 1;
+  saveStats(stats);
+  const total = stats.normal + stats.malformed;
+  if (total % 50 === 0)
+    log(`sent ${total} orders (${stats.malformed} malformed) since ${stats.since}`);
+};
+// Sends still on their way when burn:stop arrives are waited for, so an order that reaches SQS
+// is always counted (otherwise the reconciliation is off by the orders in transit).
+let pending = 0;
+let stopping = false;
+const stop = async () => {
+  if (stopping) return;
+  stopping = true;
+  clearInterval(timer);
+  for (let i = 0; i < 50 && pending > 0; i++) await new Promise((r) => setTimeout(r, 100));
+  stats.running = false;
+  stats.runs[stats.runs.length - 1]!.stoppedAt = new Date().toISOString();
+  saveStats(stats);
+  log(
+    `stopped: ${stats.normal} normal + ${stats.malformed} malformed orders in SQS since ${stats.since}`,
+  );
+  process.exit(0);
+};
+process.on("SIGTERM", () => void stop());
+process.on("SIGINT", () => void stop());
+
 let poisoning = false;
-let sent = 0;
-let poisoned = 0;
-setInterval(() => {
-  const bad = poisoning && Math.random() < POISON_RATE;
-  send(bad ? poisonOrder() : normalOrder())
-    .then(() => {
-      sent += 1;
-      if (bad) poisoned += 1;
-      if (sent % 50 === 0) log(`sent ${sent} orders (${poisoned} malformed)`);
-    })
-    .catch((err) => log(`send failed: ${err}`));
+const sendCounted = async (bad: boolean) => {
+  pending += 1;
+  try {
+    await send(bad ? poisonOrder() : normalOrder());
+    counted(bad);
+  } catch (err) {
+    log(`send failed: ${err}`);
+  } finally {
+    pending -= 1;
+  }
+};
+
+const timer = setInterval(() => {
+  if (!stopping) void sendCounted(poisoning && Math.random() < POISON_RATE);
 }, 1000 / RPS);
 
 setTimeout(async () => {
-  for (let i = 0; i < POISON_COUNT; i++) await send(poisonOrder());
-  poisoned += POISON_COUNT;
+  for (let i = 0; i < POISON_COUNT && !stopping; i++) await sendCounted(true);
   poisoning = POISON_RATE > 0;
   log(`sent ${POISON_COUNT} poison messages (lineItems instead of items); checkout-v2 is live`);
 }, POISON_DELAY_S * 1000);

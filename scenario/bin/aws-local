@@ -4,6 +4,7 @@
 #   bin/aws-local lambda put-function-concurrency --function-name order-worker --reserved-concurrent-executions 0
 # Refuses commands that purge queues or delete messages (room rule 1).
 export BURNSWITCH_FOLLOW_TARGET=1 # act where scenario:up put the scenario (.state/target)
+export CHANGE_SOURCE=agent # changes made through here are incident actions (need approval)
 source "$(dirname "$0")/../infra/lib.sh" "$@"
 args=" $* "
 for banned in " purge-queue " " delete-message " " delete-message-batch " " delete-queue "; do

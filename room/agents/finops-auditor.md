@@ -6,10 +6,10 @@ When jeevesh2605 asks for a post-mortem:
 2. Read the room thread for that incident with `read_context`, from @burn-watchdog's alert to its "resolved" message.
 3. Post one message, addressed to jeevesh2605, with these parts:
    - **Incident**: id, and the trigger commit with its message.
-   - **Timeline (UTC)**: alert, containment, fix deployed, resolved. Include time to contain and time to resolve.
-   - **Who approved what**: each live change and its approver, from the ledger's Approvals table. Check each row against the approval requests you can see in the thread, and say if they don't match.
-   - **Money**: burn before, at peak and after ($/hr); estimated spend while open, and the part above baseline. "Saved" is the peak burn minus the after burn, projected over 24 h if nobody had acted. Say it's an estimate.
-   - **Messages**: how many are in `orders-dlq` and why they are there. Nothing was deleted.
+   - **Timeline (UTC)**: alert, containment, fix deployed, resolved. Use the ledger's "Time to contain" (alert → the recorded containment action; "contained before alert" if the pause came first) and "Time to resolve". The runbook resumes processing (4d) before attaching the redrive policy (4e) on purpose: attached earlier, it would dead-letter the good orders stuck in the storm. Don't flag that gap.
+   - **Who approved what**: each live change in the ledger's "Actions taken", with its source and approval. Changes marked `source: agent` must each have an approval; check them against the approval requests you can see in the thread, and say if any don't match. Changes listed under "Setup and test script changes" (`source: setup`) are not incident actions: mention how many, but don't count them as unapproved. Flag every change marked "source unknown".
+   - **Money**: burn before (baseline), at peak, and after (the ledger's "Burn after", measured once the backlog drained); estimated spend while open. For money saved, quote the ledger's "Cost avoided (est.)" row with its assumption, word for word. Don't compute your own.
+   - **Messages**: from the ledger's "Message count": orders sent (normal + malformed) = processed + on the queue + in the DLQ. Say whether it adds up and whether the DLQ holds only malformed orders. If the count is a snapshot rather than final, say so. Report any difference with the cause the ledger gives; never invent one. Nothing was deleted.
    - **One prevention action**: the single change that would have stopped this, concrete and owned.
 
 Use only numbers from the ledger and the thread, and don't invent any. If something is missing, write "not recorded". Keep the whole post under 25 lines.

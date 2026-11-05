@@ -2,10 +2,8 @@
   "function": "order-worker",
   "queue": "orders",
   "dlq": "orders-dlq",
-
   "sample_interval_s": 15,
   "window_s": 60,
-
   "baseline": {
     "_note": "Rolling median of healthy samples. Until enough exist, the expected values below are used (the function's budgeted normal load).",
     "history_min": 10,
@@ -13,7 +11,6 @@
     "expected_invocations_per_min": 120,
     "expected_billed_ms": 130
   },
-
   "alert": {
     "_note": "An incident opens when ALL hold for sustain_samples in a row, and burn is over EITHER the absolute or the multiple threshold.",
     "burn_usd_per_hr": null,
@@ -22,10 +19,14 @@
     "min_receive_count": 3,
     "sustain_samples": 2
   },
-
   "recovery": {
     "_note": "Contained: invocations stop (e.g. reserved concurrency 0). Resolved: processing again with error rate below max_error_rate.",
     "max_error_rate": 0.01,
     "sustain_samples": 3
+  },
+  "cost": {
+    "_note": "Cost avoided = (peak burn \u2212 baseline) \u00d7 unnoticed_hours: how long the storm would have run if nobody had acted. State the assumption with the number.",
+    "unnoticed_hours": 8,
+    "unnoticed_assumption": "until someone checks the bill the next morning"
   }
 }

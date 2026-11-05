@@ -4,9 +4,9 @@
 # Telegram at each act and waits for the watchdog to see it happen:
 #   Act 1  burn alert             (automatic, ~1 min after the burn starts)
 #   Act 2  handoff + diagnosis    (@claude-code investigates and proposes; you read)
-#   Act 3  containment            (you approve 3a + 3b from your phone)
-#   Act 4  fix + recovery         (you approve 4b, 4c, 4d)
-#   Act 5  resolved + ledger      (automatic; the ledger is printed here)
+#   Act 3  containment            (you approve 3a from your phone)
+#   Act 4  fix + recovery         (you approve 4b, 4c, 4d, then 4e once the backlog drained)
+#   Act 5  resolved + ledger      (automatic: final message count, then the ledger)
 #   Act 6  late auditor           (you invite @finops-auditor and ask for the post-mortem)
 # Ctrl-C stops the rehearsal and the traffic; the watchdog keeps running.
 set -euo pipefail
@@ -54,15 +54,9 @@ read -r -p "  Press Enter when ready... " _
 bold "Setting up a clean run"
 npm run -s burn:stop -- ${REAL[@]+"${REAL[@]}"} >/dev/null 2>&1 || true
 pkill -f "watchdog/src/index.ts" 2>/dev/null && sleep 1 || true
-# Start the watchdog without an open incident from an earlier run (closed ones are kept,
-# so the ledger keeps its history). Nothing in AWS is touched by this.
-STATE="$ROOT/.state/watchdog-state.json"
-if [[ -f "$STATE" ]]; then
-  OPEN="$(jq -r '.incident.id // empty' "$STATE")"
-  [[ -n "$OPEN" ]] && say "Leaving earlier open incident $OPEN out of the new run."
-  jq 'del(.incident) | .outbox = [] | .healthy = [] | .breachStreak = 0 | .containStreak = 0 | .recoverStreak = 0' \
-    "$STATE" >"$STATE.tmp" && mv "$STATE.tmp" "$STATE"
-fi
+# An incident still open from an earlier run is closed as "abandoned" (it stays in the
+# ledger; nothing is dropped), so the new run starts with exactly one incident.
+npx tsx watchdog/src/incident/abandon.ts "a new rehearsal started before it resolved" | sed 's/^/  /'
 if ((${#REAL[@]})); then
   npm run -s scenario:reset -- --real-aws
 else
@@ -85,12 +79,11 @@ say "🔥 $INC alerted after $(elapsed). It's in the group, addressed to @claude
 
 bold "Act 2: handoff (watch the group, ~1–3 min)"
 say "@claude-code acknowledges, reproduces with bin/repro, names the cause and the commit,"
-say "then proposes containment (3a, 3b) and writes the patch."
+say "then proposes containment (3a) and writes the patch."
 
 bold "Act 3: containment (your phone)"
-say "Send, one at a time, and tap Allow once on each request:"
+say "Send this, and tap Allow once on the request (never 'Allow for this session'):"
 say "    @claude-code run 3a"
-say "    @claude-code run 3b"
 wait_for "INCIDENT $INC contained"
 say "🧯 contained at $(elapsed)."
 
@@ -98,14 +91,23 @@ bold "Act 4: fix and recovery (your phone)"
 say "When the patch and tests are posted, send one at a time, Allow once on each:"
 say "    @claude-code run 4b      (deploy the patch)"
 say "    @claude-code run 4c      (partial batch failures)"
-say "    @claude-code run 4d      (resume processing)"
+say "    @claude-code run 4d      (resume processing; then it runs bin/queue-check)"
+say "    @claude-code run 4e      (redrive policy, once queue-check says the good orders drained)"
+say "  Redrive goes last on purpose: attached earlier, it dead-letters the stuck good orders."
 wait_for "INCIDENT $INC resolved"
 say "✅ resolved at $(elapsed)."
 
-bold "Act 5: the ledger"
+bold "Act 5: after burn, final count, ledger"
+say "If 4e isn't done yet: @claude-code run 4e (once queue-check says drained), Allow once."
+say "Waiting for the after burn: backlog drained under normal traffic for a minute ..."
+wait_for "after burn for $INC"
+tail -n +"$LOG_START" "$LOG" | grep "after burn for $INC" | tail -1 | sed 's/.*after burn for /  📉 /'
 npm run -s burn:stop -- ${REAL[@]+"${REAL[@]}"} | sed 's/^/  /'
+say "Waiting for the final message count (traffic stopped, queue empty) ..."
+wait_for "final count for $INC"
+tail -n +"$LOG_START" "$LOG" | grep "final count for $INC" | tail -1 | sed 's/.*final count for /  📊 /'
 sleep 2
-npm run -s ledger:show | sed -n "/## $INC/,/### Actions/p" | sed 's/^/  /'
+npm run -s ledger:show | sed -n "/## $INC/,/### Approvals/p" | sed 's/^/  /'
 
 bold "Act 6: the late auditor (your phone)"
 say "    !invite-agent @finops-auditor"

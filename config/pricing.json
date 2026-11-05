@@ -3,7 +3,7 @@
   "source_url": "https://aws.amazon.com/lambda/pricing/",
   "region": "us-east-1",
   "architecture": "x86_64",
-  "lambda_requests_usd_per_million": 0.20,
+  "lambda_requests_usd_per_million": 0.2,
   "lambda_gb_second_usd": 0.0000166667,
   "checked_on": "2026-11-04"
 }

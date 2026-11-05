@@ -24,7 +24,8 @@
     "ledger:show": "tsx watchdog/src/ledger/show.ts",
     "scenario:down": "bash scenario/infra/down.sh",
     "preflight": "tsx scripts/preflight.ts",
-    "rehearse": "bash scripts/rehearse.sh"
+    "rehearse": "bash scripts/rehearse.sh",
+    "demo:reset": "bash scripts/demo-reset.sh"
   },
   "license": "MIT",
   "type": "module",

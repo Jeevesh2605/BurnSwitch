@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "ask": [
+      "Bash(bin/aws-local lambda put-function-concurrency *)",
+      "Bash(bin/aws-local lambda delete-function-concurrency *)",
+      "Bash(bin/aws-local lambda update-event-source-mapping *)",
+      "Bash(bin/aws-local lambda create-event-source-mapping *)",
+      "Bash(bin/aws-local lambda delete-event-source-mapping *)",
+      "Bash(bin/aws-local lambda update-function-code *)",
+      "Bash(bin/aws-local lambda update-function-configuration *)",
+      "Bash(bin/aws-local sqs set-queue-attributes *)",
+      "Bash(bin/aws-local sqs start-message-move-task *)",
+      "Bash(bin/aws-local sqs send-message *)",
+      "Bash(bin/aws-local sqs send-message-batch *)",
+      "Bash(bin/deploy-worker)",
+      "Bash(bin/deploy-worker *)",
+      "Bash(./bin/aws-local lambda put-function-concurrency *)",
+      "Bash(./bin/aws-local lambda delete-function-concurrency *)",
+      "Bash(./bin/aws-local lambda update-event-source-mapping *)",
+      "Bash(./bin/aws-local lambda create-event-source-mapping *)",
+      "Bash(./bin/aws-local lambda delete-event-source-mapping *)",
+      "Bash(./bin/aws-local lambda update-function-code *)",
+      "Bash(./bin/aws-local lambda update-function-configuration *)",
+      "Bash(./bin/aws-local sqs set-queue-attributes *)",
+      "Bash(./bin/aws-local sqs start-message-move-task *)",
+      "Bash(./bin/aws-local sqs send-message *)",
+      "Bash(./bin/aws-local sqs send-message-batch *)",
+      "Bash(./bin/deploy-worker)",
+      "Bash(./bin/deploy-worker *)"
+    ],
+    "deny": [
+      "Bash(aws *)",
+      "Bash(*/aws *)",
+      "Bash(* purge-queue*)",
+      "Bash(* delete-message*)",
+      "Bash(* delete-queue*)"
+    ]
+  }
+}

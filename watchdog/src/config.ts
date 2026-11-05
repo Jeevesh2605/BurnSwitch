@@ -32,6 +32,8 @@ export interface Thresholds {
     sustain_samples: number;
   };
   recovery: { max_error_rate: number; sustain_samples: number };
+  /** "Cost avoided" = (peak − baseline) × how long the storm would have run unnoticed. */
+  cost?: { unnoticed_hours: number; unnoticed_assumption: string };
 }
 
 export interface DeployManifest {

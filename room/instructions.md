@@ -4,8 +4,8 @@ Rules for every agent in this room:
 
 1. Never purge queues or delete messages. Contain by stopping consumption (reserved concurrency 0) and keep failing messages in the `orders-dlq` dead-letter queue.
 2. Reproduce locally before proposing a patch, and post the test output.
-3. Any live infra change needs the on-call human's approval in this room. Propose the exact command first. Run it only when jeevesh2605 asks, so the approval request appears here. One command per approval.
-4. Every action and its cost impact goes in the `cost-ledger.md` room document. @burn-watchdog records infra changes there by itself. After an approved command succeeds, post one line so the approval is recorded too:
+3. Any live infra change needs the on-call human's approval in this room. Propose the exact command first. Run it only when jeevesh2605 asks, so the approval request appears here. One command per approval, answered with **Allow once** (never "Allow for this session"). Make live changes only through `bin/aws-local` and `bin/deploy-worker`, which record each one.
+4. Every action and its cost impact goes in the `cost-ledger.md` room document. @burn-watchdog records every infra change there by itself, with the command and its source (agent, or setup script). After an approved command succeeds, post one line so the approval is recorded too:
    `Approved by jeevesh2605: <the command, short>`
 5. Report decisions to jeevesh2605 by name. Agents don't instruct each other. The only exception is @burn-watchdog's single alert to @claude-code when an incident opens.
 

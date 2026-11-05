@@ -22,7 +22,7 @@
 - [x] `orders` queue, no redrive; `orders-dlq` exists but unwired (`scenario/infra/up.sh`)
 - [x] `order-worker` Lambda with the intentional bug (throws on missing `items`, no partial batch failures)
 - [x] `scenario/deploy-manifest.json` with fake deploy commit `8f3a1c`
-- [ ] You: commit Phase 1 and run `git tag scenario-start` on that commit
+- [x] `scenario-start` tag created (now on the Phase 3 commit, buggy worker with `withRetry`)
 - [x] `inject/`: normal traffic + N poison messages (`burn:start` / `burn:stop`)
 - [x] `scenario:reset` (restores code from the tag; `--fresh` restarts LocalStack for empty queues)
 - [x] `scenario:status` (`-- --watch`) to see the storm
@@ -46,7 +46,7 @@
 - [x] Containment + resolution messages (threaded under the alert)
 - [x] Record `watchdog/fixtures/storm.json` from a clean run (4 min, 16 samples; replay opens one incident at +45s)
 - [x] Worker bug made costly: a generic `withRetry` (3 attempts, 1s/2s backoff) retries malformed orders too, so each poison attempt bills ~3s instead of ~3ms. Without it, burn stayed under baseline
-- [ ] You: move the tag to the new handler: `git tag -f scenario-start` after committing
+- [x] Tag moved to the Phase 3 commit
 - [x] **CHECKPOINT 3:** alert within ~1 min, exactly once — confirmed by you in Telegram 2026-11-05. 2026-11-05 run: burn:start 05:11:57Z, INC-20261105-0512-791f opened 05:12:55Z (58s), one incident, $0.009→$0.116/hr. Handoff to @claude-code failed (not in room yet) and the alert fell back to a room post
 
 ## Phase 4 — Ledger
@@ -58,7 +58,7 @@
 - [x] Approver fields: **TODO kept in the ledger.** Approvals (`answered_by`) are not readable by agents. The ledger records "Approved by <name>: <action>" lines posted in the room (by @claude-code, per Phase 5 instructions), with who reported each one
 - [x] Unit tests: `watchdog/test/ledger.test.ts`
 - [x] **CHECKPOINT 4:** ledger visible in the room and updates live — confirmed 2026-11-05 (`!list-documents` in Telegram lists it; `npm run ledger:show` prints it). 2026-11-05 run: created at start, updated 6 times (opened, concurrency 0, contained, redrive + unpause, resolved); time to contain 1m 15s, peak $0.100/hr (10.9×), 182 messages kept in the DLQ.
-- Runbook note for Phase 5: adding redrive *without* ReportBatchItemFailures dead-letters good orders that shared a batch with a poison one (182 in the DLQ in this run). Enable partial batch failures first, then redrive
+- Runbook note for Phase 5: adding redrive _without_ ReportBatchItemFailures dead-letters good orders that shared a batch with a poison one (182 in the DLQ in this run). Enable partial batch failures first, then redrive
 
 ## Phase 5 — Room material and agent instructions
 
@@ -97,6 +97,23 @@ Acts (from the definition of done): 1 burn alert · 2 handoff + diagnosis · 3 c
 - [x] `--real-aws`: `scenario:up/reset/status/down`, `burn:start/stop`, watchdog, `rehearse`. Shows the account + what it creates and needs the account id typed; ignores the dummy LocalStack keys; `bin/` helpers follow `.state/target` with a REAL AWS banner; `--fresh` refused with real AWS; queues never deleted (`scenario:down` prints the commands). Tested: the refusal path only (no resources created)
 - [ ] You (optional): one real-AWS run with your credentials
 - [ ] **CHECKPOINT 6:** `npm run rehearse`, Acts 1–6, no manual fixes
+
+## Audit fixes (after the Checkpoint 6 run)
+
+Flagged by @finops-auditor: unsigned changes, good orders in the DLQ, a 10-message gap.
+
+- Causes found:
+  - INC-0529's 3 changes: my scripted ledger test (`run4.sh`) called AWS directly. No agent, no approval
+  - INC-0643's 2 mapping "flips": LocalStack's list call showing a stale status (only 2 UpdateEventSourceMapping calls in its log, both approved). Fixed in Phase 6 (direct get)
+  - Good orders in the DLQ: SQS dead-letters on receive once the receive count exceeds maxReceiveCount, whatever the code does. Stuck good orders had counts of 10–120, so any redrive attached before they drained took them all (1,290 in the DLQ in the Checkpoint 6 run, ~1,000 good)
+  - The 10-message gap: malformed orders from the verification traffic started at 07:15 reached the DLQ before the "resolved" snapshot (763 → 773). Also, the generator's own log never counted the 5-message burst
+- [x] Every mutating AWS call by the scenario helpers is recorded in `.state/change-log.jsonl` with `source: agent` (bin/aws-local, bin/deploy-worker) or `source: setup` (scripts). The ledger shows each change with its command, source and paired approval; setup changes are listed separately; a change with no command is flagged "source unknown"
+- [x] `scenario/.claude/settings.json`: `ask` on every live bin/ command (prompts every time, even after "Allow for this session"); `deny` raw `aws` and purge/delete
+- [x] Runbook and @claude-code instructions: 3a pause only → 4b deploy → 4c ReportBatchItemFailures → 4d resume → `bin/queue-check` until the backlog drained → 4e redrive. (Redrive goes last, not before resuming: attached earlier it dead-letters the stuck good orders)
+- [x] Exact traffic counts (`.state/traffic-stats.json`); reconciliation sent = processed + queued + DLQ, with the DLQ split into malformed/good once the queue is empty; snapshot at resolve, final count after traffic stops (ledger + reply under the alert)
+- [x] @finops-auditor instructions: judge approvals per `source: agent` change; use the ledger's message count
+- [ ] You: paste the updated `room/instructions.md` (room Configuration) and `room/agents/claude-code.md` + `finops-auditor.md` (each agent's instructions), then `!reset` both agents
+- [ ] You: a full clean run (`npm run rehearse`) and the auditor's report
 
 ## Phase 7 — Submission polish
 

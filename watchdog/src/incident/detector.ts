@@ -7,13 +7,20 @@
 import type { Thresholds } from "../config.js";
 import type { Burn } from "../cost/model.js";
 import type { Sample } from "../metrics/types.js";
+import type { Reconciliation } from "./reconcile.js";
 
-export type Status = "burning" | "contained" | "resolved";
+// "abandoned": closed by a scenario reset before it resolved (kept in the ledger, never dropped).
+export type Status = "burning" | "contained" | "resolved" | "abandoned";
 
 export interface TimelineEntry {
   at: string;
   kind: "event" | "action" | "approval";
   text: string;
+  // For actions: who made the change (from .state/change-log.jsonl; see changes.ts).
+  source?: "agent" | "setup" | "unknown";
+  category?: "concurrency" | "redrive" | "code" | "mapping";
+  command?: string;
+  changedAt?: string; // when the command ran
 }
 
 export interface Approval {
@@ -58,6 +65,16 @@ export interface Incident {
   excessUsd: number; // the part of it above baseline
   lastSampleAt?: string;
   infra?: InfraSnapshot;
+  usedChanges?: string[]; // change-log records already attributed (see changes.ts)
+  containmentActionAt?: string; // when the recorded containment action (concurrency 0) ran
+  containedBeforeAlert?: boolean; // that action ran before the incident opened
+  afterUsdPerHr?: number; // burn once the backlog drained, with traffic still running
+  afterAt?: string;
+  drainedSince?: string;
+  abandonedAt?: string;
+  abandonedReason?: string;
+  reconciliation?: Reconciliation; // message count at resolve, then final once traffic stops
+  reconcileIdle?: number;
 }
 
 export interface OutboxItem {

@@ -34,12 +34,30 @@ TIMEOUT_S=5
 BATCH_SIZE=10
 WORKER_DIR="$ROOT/scenario/order-worker"
 
+# Every successful AWS call that changes something is recorded in .state/change-log.jsonl
+# with its source, so the ledger can tell incident actions (source: agent, from @claude-code's
+# bin/ helpers) from setup and test scripts (source: setup). CHANGE_SOURCE is set by bin/.
+CHANGE_LOG="$ROOT/.state/change-log.jsonl"
+CHANGE_SOURCE="${CHANGE_SOURCE:-setup}"
+record_change() { # <service> <operation> [args...]
+  case "$2" in
+    create-* | update-* | put-* | delete-* | set-* | attach-* | detach-* | add-* | remove-* | tag-* | untag-* | start-* | stop-*) ;;
+    *) return 0 ;;
+  esac
+  mkdir -p "$ROOT/.state"
+  jq -nc --arg at "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" --arg source "$CHANGE_SOURCE" \
+    --arg op "$1 $2" --arg command "$*" --arg script "$(basename "$0")" \
+    --arg target "$($REAL_AWS && echo real || echo local)" \
+    '{at: $at, source: $source, op: $op, command: $command, script: $script, target: $target}' \
+    >>"$CHANGE_LOG" 2>/dev/null || true
+}
+
 if $REAL_AWS; then
   # The dummy LocalStack settings from .env must not leak into real calls.
   unset AWS_ENDPOINT_URL
   if [[ "${AWS_ACCESS_KEY_ID:-}" == "test" ]]; then unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; fi
   if [[ -n "${REAL_AWS_PROFILE:-}" ]]; then export AWS_PROFILE="$REAL_AWS_PROFILE"; fi
-  awsl() { aws "$@"; }
+  awsl() { aws "$@" && record_change "$@"; }
   if ! ACCOUNT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)"; then
     echo "--real-aws: no working AWS credentials. Set AWS_PROFILE / REAL_AWS_PROFILE or run aws configure." >&2
     exit 1
@@ -49,7 +67,7 @@ else
   export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
   export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
   ENDPOINT="${AWS_ENDPOINT_URL:-http://localhost:4566}"
-  awsl() { aws --endpoint-url "$ENDPOINT" "$@"; }
+  awsl() { aws --endpoint-url "$ENDPOINT" "$@" && record_change "$@"; }
 fi
 
 # Loud warning plus a typed confirmation before anything is created in (or removed from) a

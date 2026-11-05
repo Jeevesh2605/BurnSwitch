@@ -7,7 +7,9 @@
 // created_by_agent_id}]. All need the connection bound to the room (X-Switch-Connection-Id).
 import type { DeployManifest, Thresholds } from "../config.js";
 import { usd } from "../cost/model.js";
-import type { DetectorState, Incident } from "../incident/detector.js";
+import { burnAfter, costAvoided, span, timeToContain } from "../incident/summary.js";
+import { changeSummary, isLegacy, matchApprovals } from "../incident/changes.js";
+import type { DetectorState, Incident, TimelineEntry } from "../incident/detector.js";
 import { log } from "../log.js";
 import { SwitchHttpError, type SwitchHttp } from "../switch/http.js";
 
@@ -17,27 +19,27 @@ const MAX_CLOSED = 5;
 
 const time = (iso: string) => iso.slice(11, 19);
 const dateTime = (iso: string) => `${iso.slice(0, 10)} ${iso.slice(11, 19)}`;
-const span = (from: string, to?: string) => {
-  if (!to) return "—";
-  const s = Math.round((Date.parse(to) - Date.parse(from)) / 1000);
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
-};
 const money = (n: number) => (n >= 0.01 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`);
 const x = (a: number, b: number) => (b > 0 ? ` (${(a / b).toFixed(1)}× baseline)` : "");
-const STATUS = { burning: "🔥 burning", contained: "🧯 contained", resolved: "✅ resolved" };
+const STATUS = {
+  burning: "🔥 burning",
+  contained: "🧯 contained",
+  resolved: "✅ resolved",
+  abandoned: "⏹ abandoned: the scenario was reset before it resolved",
+};
 
 function renderIncident(inc: Incident, deploy: DeployManifest, t: Thresholds): string {
   const d = deploy.deploy;
-  const after = inc.finalUsdPerHr != null ? `${usd(inc.finalUsdPerHr)}/hr` : "— (not resolved yet)";
   const rows: [string, string][] = [
-    ["Status", STATUS[inc.status]],
+    ["Status", STATUS[inc.status] + (inc.abandonedReason ? ` (${inc.abandonedReason})` : "")],
     ["Trigger", `commit \`${d.commit}\` "${d.message}" (deployed ${dateTime(d.deployed_at)} UTC)`],
     ["Opened", `${dateTime(inc.openedAt)} UTC`],
-    ["Time to contain", span(inc.openedAt, inc.containedAt)],
+    ["Time to contain", timeToContain(inc)],
     ["Time to resolve", span(inc.openedAt, inc.resolvedAt)],
     ["Burn before (baseline)", `${usd(inc.baselineUsdPerHr)}/hr`],
     ["Burn at peak", `${usd(inc.peakUsdPerHr)}/hr${x(inc.peakUsdPerHr, inc.baselineUsdPerHr)}`],
-    ["Burn after", after],
+    ["Burn after", burnAfter(inc)],
+    ["Cost avoided (est.)", costAvoided(inc, t).text],
     [
       "Spend while open (est.)",
       `${money(inc.spendUsd ?? 0)}, of which ${money(inc.excessUsd ?? 0)} above baseline`,
@@ -47,17 +49,75 @@ function renderIncident(inc: Incident, deploy: DeployManifest, t: Thresholds): s
     ["Peak receive count", String(inc.peakReceiveCount ?? "?")],
   ];
   if (inc.dlqAtResolve != null) rows.push([`Messages kept in ${t.dlq}`, String(inc.dlqAtResolve)]);
+  const sum = changeSummary(inc);
+  rows.push([
+    "Live changes",
+    sum.legacy
+      ? `${sum.legacy} recorded before change attribution existed (${sum.legacyApproved} paired with an approval line)`
+      : `${sum.agent} by @claude-code (${sum.approved} approved` +
+        (sum.unapproved ? `, ⚠️ ${sum.unapproved} without an approval` : " ✅") +
+        `) · ${sum.setup} by setup/test scripts (not incident actions)` +
+        (sum.unattributed ? ` · ⚠️ ${sum.unattributed} with no recorded command` : ""),
+  ]);
 
+  const esc = (v: string) => v.replace(/\|/g, "\\|");
   const timeline = (inc.timeline ?? []).map((e) => `- ${time(e.at)} ${e.text}`);
-  const actions = (inc.timeline ?? []).filter((e) => e.kind === "action");
+  const entries = (inc.timeline ?? []).map((e, i) => ({ e, i }));
+  const actions = entries.filter(({ e }) => e.kind === "action" && e.source !== "setup");
+  const setup = entries.filter(({ e }) => e.kind === "action" && e.source === "setup");
+  const matches = matchApprovals(inc);
   const approvals = inc.approvals ?? [];
+  const matched = new Set([...matches.values()].filter(Boolean));
+  const spare = approvals.filter((a) => !matched.has(a));
+
+  const actionLine = ({ e, i }: { e: TimelineEntry; i: number }) => {
+    const cmd = e.command ? ` · \`${e.command.replace(/\s+/g, " ").slice(0, 110)}\`` : "";
+    if (e.source === "agent") {
+      const a = matches.get(i);
+      return a
+        ? `- ${time(e.at)} ${e.text} · source: agent · ✅ approved by ${a.by} (${time(a.at)})${cmd}`
+        : `- ${time(e.at)} ${e.text} · source: agent · ⚠️ no matching approval${cmd}`;
+    }
+    if (isLegacy(e)) {
+      const a = matches.get(i);
+      return (
+        `- ${time(e.at)} ${e.text} · recorded before change attribution · ` +
+        (a ? `approval line by ${a.by} (${time(a.at)})` : "no approval line")
+      );
+    }
+    return `- ${time(e.at)} ${e.text} · ⚠️ source unknown: no recorded command (made outside bin/ helpers and scripts, or an emulator status change)`;
+  };
+
+  const r = inc.reconciliation;
+  const count = r?.injected
+    ? [
+        `### Message count${r.final ? " (final)" : ` (snapshot at ${time(r.at)})`}`,
+        "",
+        "| | |",
+        "|---|---|",
+        `| Sent by the traffic generator | ${r.injected.total} (${r.injected.normal} normal + ${r.injected.malformed} malformed) |`,
+        `| Processed (priced in a completed invocation) | ${r.processed} |`,
+        `| On the queue | ${r.visible} visible + ${r.inFlight} in flight |`,
+        `| In ${t.dlq} | ${r.dlq}` +
+          (r.goodInDlq !== undefined
+            ? ` (${r.malformedInDlq} malformed, ${r.goodInDlq} good)`
+            : "") +
+          " |",
+        `| Difference | ${r.difference === 0 ? "0 ✓" : String(r.difference)} |`,
+        "",
+        ...r.notes.map((n) => `- ${n}`),
+        "",
+      ]
+    : r
+      ? ["### Message count", "", ...r.notes.map((n) => `- ${n}`), ""]
+      : [];
 
   return [
     `## ${inc.id}`,
     "",
     "| | |",
     "|---|---|",
-    ...rows.map(([k, v]) => `| ${k} | ${v.replace(/\|/g, "\\|")} |`),
+    ...rows.map(([k, v]) => `| ${k} | ${esc(v)} |`),
     "",
     "### Timeline (UTC)",
     "",
@@ -65,12 +125,23 @@ function renderIncident(inc: Incident, deploy: DeployManifest, t: Thresholds): s
     "",
     "### Actions taken",
     "",
-    "Infra changes the watchdog saw on order-worker, its queue and its event source mapping.",
+    "Infra changes the watchdog saw, each with the command behind it (from `.state/change-log.jsonl`) " +
+      "and, for @claude-code's commands, the approval it was paired with.",
     "",
-    ...(actions.length
-      ? actions.map((e) => `- ${time(e.at)} ${e.text}`)
-      : ["- None yet. No live change has been made."]),
+    ...(actions.length ? actions.map(actionLine) : ["- None. No live change was made."]),
     "",
+    ...(setup.length
+      ? [
+          "Setup and test script changes (source: setup; not incident actions, no approval expected):",
+          "",
+          ...setup.map(
+            ({ e }) =>
+              `- ${time(e.at)} ${e.text} · source: setup (${e.command ? `\`${e.command.slice(0, 80)}\`` : "script"})`,
+          ),
+          "",
+        ]
+      : []),
+    ...count,
     "### Approvals",
     "",
     ...(approvals.length
@@ -78,12 +149,17 @@ function renderIncident(inc: Incident, deploy: DeployManifest, t: Thresholds): s
           "| Time (UTC) | Approved by | Action | Reported by |",
           "|---|---|---|---|",
           ...approvals.map(
-            (a) =>
-              `| ${time(a.at)} | ${a.by} | ${a.action.replace(/\|/g, "\\|")} | @${a.reportedBy} |`,
+            (a) => `| ${time(a.at)} | ${a.by} | ${esc(a.action)} | @${a.reportedBy} |`,
           ),
         ]
       : ["- None recorded yet."]),
     "",
+    ...(spare.length
+      ? [
+          `Approvals with no infra change behind them: ${spare.map((a) => `${time(a.at)} "${a.action}"`).join("; ")}.`,
+          "",
+        ]
+      : []),
     "> TODO(approvals): Switch stores who tapped Allow on an approval card (`answered_by`), " +
       "but no agent operation returns it (`read_context` has only messages and joins). " +
       'Rows above come from the "Approved by <name>: <action>" line that the agent which ran ' +

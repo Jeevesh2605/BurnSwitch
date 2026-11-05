@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Read-only: has the backlog of good orders drained? Use between runbook steps 4d and 4e.
+#   good orders outstanding = normal orders sent − orders processed (from the Lambda logs)
+# Malformed orders keep retrying until the redrive policy is attached, so the queue itself
+# doesn't empty: what matters is that no good order is still waiting.
+export BURNSWITCH_FOLLOW_TARGET=1
+source "$(dirname "$0")/../infra/lib.sh" "$@"
+for q in "$QUEUE" "$DLQ"; do
+  awsl sqs get-queue-attributes --queue-url "$(queue_url "$q")" \
+    --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
+    --query Attributes --output json |
+    jq -r --arg q "$q" '"\($q): \(.ApproximateNumberOfMessages) visible + \(.ApproximateNumberOfMessagesNotVisible) in flight"'
+done
+since=$((($(date +%s) - 60) * 1000))
+lines="$(awsl logs filter-log-events --log-group-name "/aws/lambda/$FUNCTION" --start-time "$since" \
+  --query 'events[].message' --output json 2>/dev/null | jq -r '.[]')"
+priced=$(grep -c '"msg":"order priced"' <<<"$lines" || true)
+rejected=$(grep -cE '"msg":"(invalid order|order failed)"' <<<"$lines" || true)
+failed=$(grep -c $'\tERROR\tInvoke Error' <<<"$lines" || true)
+echo "last 60 s: $priced orders priced, $rejected malformed rejected, $failed failed invocations"
+real=(); $REAL_AWS && real=(--real-aws)
+r="$(cd "$ROOT" && npx tsx watchdog/src/incident/outstanding.ts ${real[@]+"${real[@]}"} 2>/dev/null)"
+if [[ -z "$r" || "$r" == "null" ]]; then
+  echo "→ no traffic stats (.state/traffic-stats.json): can't tell. Check the logs by hand."
+  exit 0
+fi
+out=$(jq .outstanding <<<"$r")
+echo "good orders: $(jq .normal <<<"$r") sent, $(jq .processed <<<"$r") processed, $out still waiting"
+if ((out <= 10 && failed == 0)); then
+  echo "→ drained: safe to attach the redrive policy (step 4e)."
+else
+  echo "→ not yet ($out good orders waiting, $failed failed invocations). Check again in 30 s."
+fi

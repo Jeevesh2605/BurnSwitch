@@ -74,12 +74,12 @@ function step(d: Detector, s: Sample) {
 test("infraChanges describes each change and skips what a source can't see", () => {
   const base = { reservedConcurrency: null, redriveConfigured: false, codeSha: "a" };
   assert.deepEqual(infraChanges(base, { ...base }), []);
-  assert.match(infraChanges(base, { ...base, reservedConcurrency: 0 })[0]!, /set to 0/);
+  assert.match(infraChanges(base, { ...base, reservedConcurrency: 0 })[0]!.text, /set to 0/);
   assert.match(
-    infraChanges(base, { ...base, redriveConfigured: true })[0]!,
+    infraChanges(base, { ...base, redriveConfigured: true })[0]!.text,
     /Redrive policy added/,
   );
-  assert.match(infraChanges(base, { ...base, codeSha: "b" })[0]!, /New code deployed/);
+  assert.match(infraChanges(base, { ...base, codeSha: "b" })[0]!.text, /New code deployed/);
   // A replay fixture without codeSha must not look like a deploy.
   assert.deepEqual(infraChanges(base, { ...base, codeSha: undefined }), []);
 });

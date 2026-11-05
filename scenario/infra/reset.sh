@@ -26,6 +26,7 @@ fi
 
 if $FRESH; then
   echo "Restarting LocalStack for a clean emulator state ..."
+  rm -f "$ROOT/.state/traffic-stats.json" # empty queues: the order count starts over
   docker compose rm -sf localstack
   docker compose up -d localstack
   exec "$ROOT/scenario/infra/up.sh"
