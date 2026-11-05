@@ -8,7 +8,7 @@
 - [x] LocalStack by default; real AWS only behind `--real-aws` (enforced from Phase 1/6)
 - [x] Never purge queues or delete messages (standing rule)
 - [x] Secrets in `.env` only; `.env.example` added; `.env` ignored
-- [ ] Lambda rates in `config/pricing.json` with a TODO for you (Phase 3)
+- [x] Lambda rates in `config/pricing.json` (filled by you, checked 2026-11-04)
 - [x] PROGRESS.md maintained (you make the commits and tags yourself)
 
 ## Phase 0 — Scaffold
@@ -40,12 +40,14 @@
 
 - [x] Metrics adapters: `cloudwatch`, `localstack-probe` (default; reads REPORT/ERROR log lines + SQS), `replay` (+ `npm run metrics:record`)
 - [x] Cost model from `config/pricing.json` (requests + GB-seconds)
-- [ ] You: fill the two Lambda rates in `config/pricing.json` (watchdog refuses to start without them)
+- [x] Lambda rates filled in `config/pricing.json` (us-east-1 x86: $0.20/M requests, $0.0000166667/GB-s)
 - [x] Detection with rolling baseline, one incident id, no duplicates (unit-tested)
 - [x] Single handoff to @claude-code with loop guard (persisted before sending)
 - [x] Containment + resolution messages (threaded under the alert)
-- [ ] Record `watchdog/fixtures/storm.json` from a clean run
-- [ ] **CHECKPOINT 3:** alert within ~1 min, exactly once
+- [x] Record `watchdog/fixtures/storm.json` from a clean run (4 min)
+- [x] Worker bug made costly: a generic `withRetry` (3 attempts, 1s/2s backoff) retries malformed orders too, so each poison attempt bills ~3s instead of ~3ms. Without it, burn stayed under baseline
+- [ ] You: move the tag to the new handler: `git tag -f scenario-start` after committing
+- [ ] **CHECKPOINT 3:** alert within ~1 min, exactly once — 2026-11-05 run: burn:start 05:11:57Z, INC-20261105-0512-791f opened 05:12:55Z (58s), one incident, $0.009→$0.116/hr. Handoff to @claude-code failed (not in room yet) and the alert fell back to a room post
 
 ## Phase 4 — Ledger
 
