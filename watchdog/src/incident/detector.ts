@@ -10,6 +10,29 @@ import type { Sample } from "../metrics/types.js";
 
 export type Status = "burning" | "contained" | "resolved";
 
+export interface TimelineEntry {
+  at: string;
+  kind: "event" | "action" | "approval";
+  text: string;
+}
+
+export interface Approval {
+  at: string;
+  by: string;
+  action: string;
+  reportedBy: string; // who posted it in the room (Switch doesn't expose answered_by to agents)
+  messageId: string;
+}
+
+/** Infra settings seen on the last sample, diffed to record actions in the ledger. */
+export interface InfraSnapshot {
+  reservedConcurrency: number | null;
+  redriveConfigured: boolean;
+  codeSha?: string;
+  mappingState?: string;
+  partialBatchResponse?: boolean;
+}
+
 export interface Incident {
   id: string;
   status: Status;
@@ -28,6 +51,13 @@ export interface Incident {
   dlqAtResolve?: number;
   handoffSent: boolean; // loop guard: @claude-code is addressed at most once per incident
   alertEventId?: string;
+  // Ledger (Phase 4)
+  timeline: TimelineEntry[];
+  approvals: Approval[];
+  spendUsd: number; // estimated spend while the incident was open
+  excessUsd: number; // the part of it above baseline
+  lastSampleAt?: string;
+  infra?: InfraSnapshot;
 }
 
 export interface DetectorState {
@@ -37,6 +67,7 @@ export interface DetectorState {
   recoverStreak: number;
   incident?: Incident;
   closed: Incident[];
+  ledger?: { documentId?: string; syncedKey?: string };
 }
 
 export type DetectorEvent =
@@ -117,6 +148,10 @@ export class Detector {
           firstSample: s,
           firstBurn: b,
           handoffSent: false,
+          timeline: [],
+          approvals: [],
+          spendUsd: 0,
+          excessUsd: 0,
         };
         st.breachStreak = 0;
         events.push({ type: "opened", incident: st.incident });

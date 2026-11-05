@@ -12,6 +12,10 @@ export interface Sample {
   dlqVisible: number;
   redriveConfigured: boolean;
   reservedConcurrency: number | null; // null = no reservation
+  // Optional so older replay fixtures still load; the ledger only diffs values it has.
+  codeSha?: string; // CodeSha256 of the deployed function
+  mappingState?: string; // event source mapping state (Enabled, Disabled, ...)
+  partialBatchResponse?: boolean; // ReportBatchItemFailures on the mapping
 }
 
 export interface MetricsAdapter {

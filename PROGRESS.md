@@ -44,16 +44,21 @@
 - [x] Detection with rolling baseline, one incident id, no duplicates (unit-tested)
 - [x] Single handoff to @claude-code with loop guard (persisted before sending)
 - [x] Containment + resolution messages (threaded under the alert)
-- [x] Record `watchdog/fixtures/storm.json` from a clean run (4 min)
+- [x] Record `watchdog/fixtures/storm.json` from a clean run (4 min, 16 samples; replay opens one incident at +45s)
 - [x] Worker bug made costly: a generic `withRetry` (3 attempts, 1s/2s backoff) retries malformed orders too, so each poison attempt bills ~3s instead of ~3ms. Without it, burn stayed under baseline
 - [ ] You: move the tag to the new handler: `git tag -f scenario-start` after committing
-- [ ] **CHECKPOINT 3:** alert within ~1 min, exactly once — 2026-11-05 run: burn:start 05:11:57Z, INC-20261105-0512-791f opened 05:12:55Z (58s), one incident, $0.009→$0.116/hr. Handoff to @claude-code failed (not in room yet) and the alert fell back to a room post
+- [x] **CHECKPOINT 3:** alert within ~1 min, exactly once — confirmed by you in Telegram 2026-11-05. 2026-11-05 run: burn:start 05:11:57Z, INC-20261105-0512-791f opened 05:12:55Z (58s), one incident, $0.009→$0.116/hr. Handoff to @claude-code failed (not in room yet) and the alert fell back to a room post
 
 ## Phase 4 — Ledger
 
-- [ ] `cost-ledger.md` room document, created and updated live
-- [ ] Approver fields (see notes: approvals are not in `read_context`)
-- [ ] **CHECKPOINT 4**
+- [x] `cost-ledger.md` room document (`watchdog/src/ledger/ledger.ts`): created on first connect, found again by name after a restart, recreated if deleted from the room UI
+- [x] Contents: incident id, trigger commit, timeline, burn before/peak/after, estimated spend (and excess over baseline), actions taken, approvals, time to contain/resolve, DLQ count
+- [x] Actions come from infra diffs the watchdog sees itself (`watchdog/src/incident/timeline.ts`): reserved concurrency, redrive policy, new code (CodeSha256), ReportBatchItemFailures, mapping state
+- [x] Rewritten only when an incident changes: every document update also posts a "📄 updated room document" notice in the room, so no timer refresh
+- [x] Approver fields: **TODO kept in the ledger.** Approvals (`answered_by`) are not readable by agents. The ledger records "Approved by <name>: <action>" lines posted in the room (by @claude-code, per Phase 5 instructions), with who reported each one
+- [x] Unit tests: `watchdog/test/ledger.test.ts`
+- [ ] **CHECKPOINT 4:** ledger visible in the room and updates live — 2026-11-05 run: created at start, updated 6 times (opened, concurrency 0, contained, redrive + unpause, resolved); time to contain 1m 15s, peak $0.100/hr (10.9×), 182 messages kept in the DLQ. Waiting for you to check it in the room
+- Runbook note for Phase 5: adding redrive *without* ReportBatchItemFailures dead-letters good orders that shared a batch with a poison one (182 in the DLQ in this run). Enable partial batch failures first, then redrive
 
 ## Phase 5 — Room material and agent instructions
 
@@ -86,6 +91,7 @@
 ## Notes from the Switch docs (verified 2026-11-04)
 
 - Room documents can't be opened from Telegram; people see them via `!list-documents`, Switch Console or the Gateway.
+- Every `create_room_document` / `update_room_document` posts a "📄 created/updated room document" notice in the room (switch-core 0.31.0, not configurable). Document names are unique per room.
 - Addressing another agent: use `send_targeted_message` (`target_names`), not an `@name` inside `post_message`.
 - `create_room_document` / `update_room_document` need a connection bound to the room (connection id header).
 - Approval answers (`answered_by`) are stored server-side but no agent operation exposes them; `read_context` returns only messages and joins.

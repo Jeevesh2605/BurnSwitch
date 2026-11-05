@@ -1,4 +1,8 @@
-import { GetFunctionConcurrencyCommand } from "@aws-sdk/client-lambda";
+import {
+  GetFunctionConcurrencyCommand,
+  GetFunctionConfigurationCommand,
+  ListEventSourceMappingsCommand,
+} from "@aws-sdk/client-lambda";
 import { GetQueueAttributesCommand, GetQueueUrlCommand } from "@aws-sdk/client-sqs";
 import { aws } from "../aws.js";
 
@@ -11,7 +15,10 @@ async function queueUrl(name: string): Promise<string> {
   return res.QueueUrl!;
 }
 
-/** Queue depth, redrive and concurrency: read-only calls shared by the live adapters. */
+/**
+ * Queue depth, redrive, concurrency, deployed code and event source mapping settings.
+ * Read-only calls shared by the live adapters; the ledger diffs them to record actions.
+ */
 export async function readInfra(fn: string, queue: string, dlq: string) {
   const attrs = async (name: string) =>
     (
@@ -26,16 +33,24 @@ export async function readInfra(fn: string, queue: string, dlq: string) {
         }),
       )
     ).Attributes ?? {};
-  const [q, d, conc] = await Promise.all([
+  const [q, d, conc, cfg, esm] = await Promise.all([
     attrs(queue),
     attrs(dlq),
     aws.lambda.send(new GetFunctionConcurrencyCommand({ FunctionName: fn })),
+    aws.lambda.send(new GetFunctionConfigurationCommand({ FunctionName: fn })),
+    aws.lambda.send(new ListEventSourceMappingsCommand({ FunctionName: fn })),
   ]);
+  const mapping = esm.EventSourceMappings?.[0];
   return {
     queueVisible: Number(q.ApproximateNumberOfMessages ?? 0),
     queueInFlight: Number(q.ApproximateNumberOfMessagesNotVisible ?? 0),
     dlqVisible: Number(d.ApproximateNumberOfMessages ?? 0),
     redriveConfigured: Boolean(q.RedrivePolicy),
     reservedConcurrency: conc.ReservedConcurrentExecutions ?? null,
+    codeSha: cfg.CodeSha256,
+    mappingState: mapping?.State,
+    partialBatchResponse: mapping
+      ? (mapping.FunctionResponseTypes ?? []).includes("ReportBatchItemFailures")
+      : undefined,
   };
 }

@@ -3,13 +3,16 @@
 //   - prices it (config/pricing.json) and runs the detector (config/thresholds.json)
 //   - on a new incident, addresses @claude-code ONCE; posts containment and resolution updates
 //   - answers people who address it with the current status
+//   - keeps the cost-ledger.md room document (timeline, actions, approvals, burn before/after)
 import "./env.js";
 import { requireEnv } from "./env.js";
 import { loadDeployManifest, loadPricing, loadThresholds } from "./config.js";
 import { burnOf, expectedBurn, usd, type Burn } from "./cost/model.js";
-import { Detector, type DetectorEvent } from "./incident/detector.js";
+import { Detector, type DetectorEvent, type Incident } from "./incident/detector.js";
 import { alertText, containedText, resolvedText } from "./incident/messages.js";
 import { loadState, saveState } from "./incident/store.js";
+import { noteApproval, parseApproval, track } from "./incident/timeline.js";
+import { Ledger, renderLedger } from "./ledger/ledger.js";
 import { log } from "./log.js";
 import { createAdapter, type Sample } from "./metrics/index.js";
 import { resolveBridgeUrl } from "./switch/config.js";
@@ -53,9 +56,65 @@ if (detector.state.incident) {
 let connected = false;
 let last: { sample: Sample; burn: Burn } | undefined;
 
+const ledger = new Ledger(http, agentId, detector.state);
+let ledgerChecked = false;
+async function syncLedger(force = false): Promise<void> {
+  if (!connected) return; // document ops need the connection bound to the room
+  await ledger.sync(
+    renderLedger(detector.state, deploy, thresholds, new Date().toISOString()),
+    force,
+  );
+  saveState(detector.state);
+}
+
 // ---- Switch side ---------------------------------------------------------------------------
 
-conn.on("ready", () => (connected = true));
+conn.on("ready", () => {
+  connected = true;
+  // Once per process: make sure the ledger exists and shows the current state.
+  if (!ledgerChecked) {
+    ledgerChecked = true;
+    void syncLedger(true);
+  }
+});
+
+// Approvals, as reported in the room: "Approved by <name>: <action>". Any sender but us.
+const AFTER_RESOLVE_MS = 10 * 60_000;
+function incidentAt(ms: number): Incident | undefined {
+  const all = [
+    ...(detector.state.incident ? [detector.state.incident] : []),
+    ...detector.state.closed,
+  ];
+  return all.find(
+    (i) =>
+      Date.parse(i.openedAt) <= ms &&
+      ms <= (i.resolvedAt ? Date.parse(i.resolvedAt) + AFTER_RESOLVE_MS : Infinity),
+  );
+}
+conn.on("event", (ev) => {
+  if (ev.type !== "message") return;
+  const p = ev.payload as unknown as {
+    sender_name: string;
+    body: string;
+    message_id: string;
+    timestamp: number;
+  };
+  if (p.sender_name === "burn-watchdog" || typeof p.body !== "string") return;
+  const approval = parseApproval(p.body);
+  if (!approval) return;
+  const inc = incidentAt(p.timestamp);
+  if (!inc) {
+    log("info", `approval by ${approval.by} outside any incident; not recorded`);
+    return;
+  }
+  if (
+    noteApproval(inc, approval, p.sender_name, p.message_id, new Date(p.timestamp).toISOString())
+  ) {
+    log("info", `ledger: ${approval.by} approved "${approval.action}" (${inc.id})`);
+    saveState(detector.state);
+    void syncLedger();
+  }
+});
 
 conn.on("addressed", async (ev) => {
   const { sender_name, body, timestamp, thread_id, message_id } = ev.payload;
@@ -126,6 +185,7 @@ async function tick(): Promise<void> {
     const b = burnOf(s, pricing);
     last = { sample: s, burn: b };
     const events = detector.observe(s, b);
+    track(detector.state.incident, events, s, b, thresholds.sample_interval_s);
     saveState(detector.state);
     const inc = detector.state.incident;
     log(
@@ -140,6 +200,7 @@ async function tick(): Promise<void> {
     if (events.length && !connected) log("warn", "not connected to Switch yet; posting anyway");
     for (const ev of events) await handle(ev, s, b);
     saveState(detector.state);
+    await syncLedger();
   } catch (err) {
     log("warn", `sample failed: ${(err as Error).message}`);
   } finally {
