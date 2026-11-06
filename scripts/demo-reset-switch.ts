@@ -26,7 +26,12 @@ const http = new SwitchHttp(base, agentId, requireEnv("SWITCH_AGENT_API_KEY"));
 if (roomName) {
   type Room = { room_id: string; name: string; archived?: boolean };
   const rooms = (await http.op<Room[]>("list_all_rooms")).filter((r) => !r.archived);
-  const hits = rooms.filter((r) => r.name.toLowerCase().includes(roomName.toLowerCase()));
+  // Bridged rooms are named "<bot>: <group>", e.g. "BurnSwitch: finops-control". An exact
+  // match on the full name or the group part wins; otherwise any name containing the text.
+  const want = roomName.toLowerCase();
+  const group = (n: string) => n.slice(n.indexOf(": ") + 2).toLowerCase();
+  const exact = rooms.filter((r) => r.name.toLowerCase() === want || group(r.name) === want);
+  const hits = exact.length ? exact : rooms.filter((r) => r.name.toLowerCase().includes(want));
   if (hits.length !== 1) {
     console.error(
       `Expected one room matching "${roomName}", found ${hits.length}: ` +

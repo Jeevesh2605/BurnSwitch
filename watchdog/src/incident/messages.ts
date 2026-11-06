@@ -53,6 +53,6 @@ export function resolvedText(inc: Incident, s: Sample, b: Burn, t: Thresholds): 
     ...(inc.reconciliation
       ? [reconciliationLine(inc.reconciliation), ...inc.reconciliation.notes.map((n) => `  ${n}`)]
       : []),
-    `• Opened ${inc.openedAt}${inc.containedAt ? `, contained after ${mins(inc.openedAt, inc.containedAt)}` : ""}, resolved after ${mins(inc.openedAt, s.at)}.`,
+    `• Opened ${inc.openedAt}. Time to contain: ${timeToContain(inc)} (alert → the containment command). Resolved after ${mins(inc.openedAt, s.at)}.`,
   ].join("\n");
 }

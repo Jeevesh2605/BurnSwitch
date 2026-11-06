@@ -5,7 +5,7 @@
 //   - approvals, as reported in the room (see parseApproval)
 import { usd, type Burn } from "../cost/model.js";
 import type { Sample } from "../metrics/types.js";
-import { attribute, type ChangeCategory, type ChangeRecord } from "./changes.js";
+import { attribute, LOGGED_ONLY, type ChangeCategory, type ChangeRecord } from "./changes.js";
 import type { DetectorEvent, Incident, InfraSnapshot, TimelineEntry } from "./detector.js";
 
 const snapshot = (s: Sample): InfraSnapshot => ({
@@ -152,6 +152,33 @@ export function track(
         changedAt: rec?.at,
       });
     }
+    // A DLQ move doesn't show in the infra a sample reads: take it from the change log.
+    for (const category of LOGGED_ONLY) {
+      let rec: ChangeRecord | undefined;
+      while ((rec = attribute(category, from, s.at, changes, used))) {
+        target.timeline.push({
+          at: s.at,
+          kind: "action",
+          text: "Messages moved from the DLQ back to the queue (start-message-move-task)",
+          category,
+          source: rec.source,
+          command: rec.command,
+          changedAt: rec.at,
+        });
+      }
+    }
+    // A sample can see a change before the helper has written its log line (it writes after
+    // the command returns): retry unattributed changes for 2 min.
+    for (const e of target.timeline) {
+      if (e.kind !== "action" || e.source !== "unknown" || !e.category || e.command) continue;
+      if (Date.parse(s.at) - Date.parse(e.at) > 120_000) continue;
+      const rec = attribute(e.category, e.at, e.at, changes, used);
+      if (!rec) continue;
+      if (target.containmentActionAt === e.at && e.category === "concurrency") {
+        target.containmentActionAt = rec.at;
+      }
+      Object.assign(e, { source: rec.source, command: rec.command, changedAt: rec.at });
+    }
     target.usedChanges = [...used];
     target.infra = next;
   }
@@ -185,6 +212,31 @@ export function parseApproval(body: string): { by: string; action: string } | un
   const m = APPROVAL.exec(body);
   if (!m) return undefined;
   return { by: m[1]!, action: m[2]!.split("\n")[0]!.trim().slice(0, 300) };
+}
+
+/**
+ * The on-call human asking @claude-code to run something, e.g. "@claude-code run 4c".
+ * Its permission prompt follows, so this is the request the change is paired with.
+ */
+export function parseRequest(body: string): string | undefined {
+  const line = body.split("\n").find((l) => /\brun\b/i.test(l));
+  return line?.trim().slice(0, 200);
+}
+
+/** Records a request on the incident. Returns false if this message was already recorded. */
+export function noteRequest(
+  inc: Incident,
+  by: string,
+  text: string,
+  messageId: string,
+  at: string,
+): boolean {
+  inc.requests ??= [];
+  inc.timeline ??= [];
+  if (inc.requests.some((r) => r.messageId === messageId)) return false;
+  inc.requests.push({ at, by, text, messageId });
+  add(inc, at, "request", `${by} asked: "${text}"`);
+  return true;
 }
 
 /** Records an approval on the incident. Returns false if this message was already recorded. */

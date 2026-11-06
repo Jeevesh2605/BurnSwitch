@@ -2,10 +2,22 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Thresholds } from "../src/config.js";
 import { burnOf } from "../src/cost/model.js";
-import { changeSummary, matchApprovals, type ChangeRecord } from "../src/incident/changes.js";
+import {
+  changeSummary,
+  matchApprovals,
+  matchRequests,
+  requestKind,
+  type ChangeRecord,
+} from "../src/incident/changes.js";
 import { Detector } from "../src/incident/detector.js";
 import { buildReconciliation, countProcessed } from "../src/incident/reconcile.js";
-import { noteApproval, parseApproval, track } from "../src/incident/timeline.js";
+import {
+  noteApproval,
+  noteRequest,
+  parseApproval,
+  parseRequest,
+  track,
+} from "../src/incident/timeline.js";
 import { costAvoided, timeToContain } from "../src/incident/summary.js";
 import type { Sample } from "../src/metrics/types.js";
 
@@ -250,4 +262,84 @@ test("cost avoided = (peak − baseline) × unnoticed hours, with the assumption
   });
   assert.ok(Math.abs(c.usd - 0.8) < 1e-9);
   assert.match(c.text, /× 8 h.*overnight/);
+});
+
+test("runbook steps map to the change they make", () => {
+  assert.equal(requestKind("@claude-code run 3a"), "concurrency");
+  assert.equal(requestKind("@claude-code run 4b"), "code");
+  assert.equal(requestKind("@claude-code run 4c"), "mapping");
+  assert.equal(requestKind("@claude-code run 4d"), "redrive");
+  assert.equal(requestKind("@claude-code run 4e"), "concurrency");
+  assert.equal(requestKind("@claude-code run 4f"), "move");
+  assert.equal(parseRequest("@claude-code run 4c"), "@claude-code run 4c");
+  assert.equal(parseRequest("looks good"), undefined);
+});
+
+test("a change seen before its log line is attributed on a later sample (INC-0348's 4c)", () => {
+  const d = new Detector(t, { usdPerHr: 1, invocationsPerMin: 120 });
+  const step = (s: Sample, changes: ChangeRecord[]) => {
+    const ev = d.observe(s, burnOf(s, rates));
+    track(d.state.incident, ev, s, burnOf(s, rates), 15, changes);
+  };
+  step(sample({}), []);
+  step(sample({}), []);
+  const inc = d.state.incident!;
+  noteRequest(inc, "jeevesh2605", "@claude-code run 4c", "r1", iso(clock + 2_000));
+  // The sample sees ReportBatchItemFailures, but bin/aws-local hasn't logged it yet.
+  step(sample({ partialBatchResponse: true }), []);
+  const e = inc.timeline.find((x) => x.category === "mapping")!;
+  assert.equal(e.source, "unknown");
+  const late: ChangeRecord = {
+    at: new Date(Date.parse(e.at) - 900).toISOString(),
+    source: "agent",
+    op: "lambda update-event-source-mapping",
+    command:
+      "lambda update-event-source-mapping --uuid u --function-response-types ReportBatchItemFailures",
+    script: "aws-local",
+  };
+  step(sample({ partialBatchResponse: true }), [late]);
+  assert.equal(e.source, "agent");
+  assert.equal(e.changedAt, late.at);
+  const i = inc.timeline.indexOf(e);
+  assert.equal(matchRequests(inc).get(i)?.text, "@claude-code run 4c");
+  assert.equal(changeSummary(inc).approved, 1); // the request counts, before any approval line
+});
+
+test("a request more than 2 min before the change isn't paired", () => {
+  const d = new Detector(t, { usdPerHr: 1, invocationsPerMin: 120 });
+  d.observe(sample({}), burnOf(sample({}), rates));
+  const [ev] = d.observe(sample({}), burnOf(sample({}), rates));
+  const inc = ev!.incident;
+  noteRequest(inc, "jeevesh2605", "@claude-code run 4b", "r2", iso(clock - 180_000));
+  inc.timeline.push({
+    at: iso(clock),
+    kind: "action",
+    text: "New code deployed",
+    category: "code",
+    source: "agent",
+  });
+  assert.equal(matchRequests(inc).get(inc.timeline.length - 1), undefined);
+});
+
+test("a DLQ move is recorded from the change log", () => {
+  const d = new Detector(t, { usdPerHr: 1, invocationsPerMin: 120 });
+  const step = (s: Sample, changes: ChangeRecord[] = []) => {
+    const ev = d.observe(s, burnOf(s, rates));
+    track(d.state.incident, ev, s, burnOf(s, rates), 15, changes);
+  };
+  step(sample({}));
+  step(sample({}));
+  const inc = d.state.incident!;
+  const move: ChangeRecord = {
+    at: iso(clock + 5_000),
+    source: "agent",
+    op: "sqs start-message-move-task",
+    command: "sqs start-message-move-task --source-arn a --destination-arn b",
+    script: "aws-local",
+  };
+  step(sample({}), [move]);
+  step(sample({}), [move]); // not twice
+  const moves = inc.timeline.filter((e) => e.category === "move");
+  assert.equal(moves.length, 1);
+  assert.equal(moves[0]!.source, "agent");
 });

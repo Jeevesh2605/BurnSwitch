@@ -8,7 +8,7 @@
 import type { DeployManifest, Thresholds } from "../config.js";
 import { usd } from "../cost/model.js";
 import { burnAfter, costAvoided, span, timeToContain } from "../incident/summary.js";
-import { changeSummary, isLegacy, matchApprovals } from "../incident/changes.js";
+import { changeSummary, isLegacy, matchApprovals, matchRequests } from "../incident/changes.js";
 import type { DetectorState, Incident, TimelineEntry } from "../incident/detector.js";
 import { log } from "../log.js";
 import { SwitchHttpError, type SwitchHttp } from "../switch/http.js";
@@ -48,7 +48,12 @@ function renderIncident(inc: Incident, deploy: DeployManifest, t: Thresholds): s
     ["Peak error rate", `${(inc.peakErrorRate * 100).toFixed(0)}%`],
     ["Peak receive count", String(inc.peakReceiveCount ?? "?")],
   ];
-  if (inc.dlqAtResolve != null) rows.push([`Messages kept in ${t.dlq}`, String(inc.dlqAtResolve)]);
+  if (inc.dlqAtResolve != null) {
+    rows.push([
+      `In ${t.dlq} at resolve`,
+      `${inc.dlqAtResolve} (a snapshot before the move back; the final split is under Message count)`,
+    ]);
+  }
   const sum = changeSummary(inc);
   rows.push([
     "Live changes",
@@ -66,17 +71,24 @@ function renderIncident(inc: Incident, deploy: DeployManifest, t: Thresholds): s
   const actions = entries.filter(({ e }) => e.kind === "action" && e.source !== "setup");
   const setup = entries.filter(({ e }) => e.kind === "action" && e.source === "setup");
   const matches = matchApprovals(inc);
+  const asked = matchRequests(inc);
   const approvals = inc.approvals ?? [];
   const matched = new Set([...matches.values()].filter(Boolean));
   const spare = approvals.filter((a) => !matched.has(a));
 
   const actionLine = ({ e, i }: { e: TimelineEntry; i: number }) => {
     const cmd = e.command ? ` · \`${e.command.replace(/\s+/g, " ").slice(0, 110)}\`` : "";
+    const r = asked.get(i);
+    const req = r
+      ? `requested by ${r.by} ("${r.text.replace(/^@\S+\s*/, "")}", ${time(r.at)})`
+      : "";
     if (e.source === "agent") {
       const a = matches.get(i);
-      return a
-        ? `- ${time(e.at)} ${e.text} · source: agent · ✅ approved by ${a.by} (${time(a.at)})${cmd}`
-        : `- ${time(e.at)} ${e.text} · source: agent · ⚠️ no matching approval${cmd}`;
+      const line = a ? `approval line by ${a.by} (${time(a.at)})` : "";
+      const why = [req, line].filter(Boolean).join(" · ");
+      return why
+        ? `- ${time(e.at)} ${e.text} · source: agent · ✅ ${why}${cmd}`
+        : `- ${time(e.at)} ${e.text} · source: agent · ⚠️ no matching request or approval${cmd}`;
     }
     if (isLegacy(e)) {
       const a = matches.get(i);
@@ -85,7 +97,10 @@ function renderIncident(inc: Incident, deploy: DeployManifest, t: Thresholds): s
         (a ? `approval line by ${a.by} (${time(a.at)})` : "no approval line")
       );
     }
-    return `- ${time(e.at)} ${e.text} · ⚠️ source unknown: no recorded command (made outside bin/ helpers and scripts, or an emulator status change)`;
+    return (
+      `- ${time(e.at)} ${e.text} · ⚠️ source unknown: no recorded command (made outside bin/ helpers and scripts, or an emulator status change)` +
+      (req ? ` · ${req}` : "")
+    );
   };
 
   const r = inc.reconciliation;
@@ -126,7 +141,7 @@ function renderIncident(inc: Incident, deploy: DeployManifest, t: Thresholds): s
     "### Actions taken",
     "",
     "Infra changes the watchdog saw, each with the command behind it (from `.state/change-log.jsonl`) " +
-      "and, for @claude-code's commands, the approval it was paired with.",
+      'and, for @claude-code\'s commands, the on-call request ("run …", up to 2 min before) and approval line it was paired with.',
     "",
     ...(actions.length ? actions.map(actionLine) : ["- None. No live change was made."]),
     "",
@@ -239,7 +254,14 @@ export async function restoreFromLedger(
 
 /** What the ledger shows, minus the volatile bits: the document is rewritten when this changes. */
 export function ledgerKey(state: DetectorState): string {
-  const k = (i: Incident) => [i.id, i.status, i.timeline?.length ?? 0, i.approvals?.length ?? 0];
+  // Attributed actions count too: a late attribution changes an entry, not the length.
+  const k = (i: Incident) => [
+    i.id,
+    i.status,
+    i.timeline?.length ?? 0,
+    i.approvals?.length ?? 0,
+    i.timeline?.filter((e) => e.command).length ?? 0,
+  ];
   return JSON.stringify([state.incident ? k(state.incident) : null, state.closed.map(k)]);
 }
 

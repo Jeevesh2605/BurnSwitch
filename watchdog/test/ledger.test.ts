@@ -129,7 +129,7 @@ test("a full incident: actions, spend, approvals, resolution in the ledger", () 
     "Time to contain",
     "Reserved concurrency set to 0",
     "| jeevesh2605 | put-function-concurrency 0 | @claude-code |",
-    "Messages kept in orders-dlq | 7",
+    "In orders-dlq at resolve | 7 (a snapshot",
     "TODO(approvals)",
   ]) {
     assert.ok(doc.includes(want), `ledger is missing: ${want}`);

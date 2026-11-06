@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
-# Read-only: has the backlog of good orders drained? Use between runbook steps 4d and 4e.
+# Read-only: where is the recovery after resuming (runbook steps 4e–4f)?
 #   good orders outstanding = normal orders sent − orders processed (from the Lambda logs)
-# Malformed orders keep retrying until the redrive policy is attached, so the queue itself
-# doesn't empty: what matters is that no good order is still waiting.
+# Good orders stuck in the storm were dead-lettered on resume (their receive counts were above
+# 3). Once the orders backlog has drained, they're moved back from the DLQ (step 4f).
 export BURNSWITCH_FOLLOW_TARGET=1
 source "$(dirname "$0")/../infra/lib.sh" "$@"
+backlog=0
 for q in "$QUEUE" "$DLQ"; do
-  awsl sqs get-queue-attributes --queue-url "$(queue_url "$q")" \
+  a="$(awsl sqs get-queue-attributes --queue-url "$(queue_url "$q")" \
     --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
-    --query Attributes --output json |
-    jq -r --arg q "$q" '"\($q): \(.ApproximateNumberOfMessages) visible + \(.ApproximateNumberOfMessagesNotVisible) in flight"'
+    --query Attributes --output json)"
+  jq -r --arg q "$q" '"\($q): \(.ApproximateNumberOfMessages) visible + \(.ApproximateNumberOfMessagesNotVisible) in flight"' <<<"$a"
+  [[ "$q" == "$QUEUE" ]] && backlog=$(jq '(.ApproximateNumberOfMessages|tonumber) + (.ApproximateNumberOfMessagesNotVisible|tonumber)' <<<"$a")
 done
+dlq_arn="$(queue_arn "$DLQ")"
+move="$(awsl sqs list-message-move-tasks --source-arn "$dlq_arn" --max-results 1 \
+  --query 'Results[0].Status' --output text 2>/dev/null)"
+[[ "$move" == "None" ]] && move=""
+[[ -n "$move" ]] && echo "move from $DLQ back to $QUEUE: $move"
 since=$((($(date +%s) - 60) * 1000))
 lines="$(awsl logs filter-log-events --log-group-name "/aws/lambda/$FUNCTION" --start-time "$since" \
   --query 'events[].message' --output json 2>/dev/null | jq -r '.[]')"
@@ -27,7 +34,16 @@ fi
 out=$(jq .outstanding <<<"$r")
 echo "good orders: $(jq .normal <<<"$r") sent, $(jq .processed <<<"$r") processed, $out still waiting"
 if ((out <= 10 && failed == 0)); then
-  echo "→ drained: safe to attach the redrive policy (step 4e)."
+  echo "→ done: no good orders waiting; $DLQ holds only malformed orders."
+elif [[ "$move" == "RUNNING" ]]; then
+  echo "→ moving messages back ($out good orders waiting). Check again in 30 s."
+elif ((backlog <= 20 && failed == 0)); then
+  if [[ "$move" == "COMPLETED" ]]; then
+    echo "→ the move finished but $out good orders are still waiting. Check again in 30 s; if it doesn't change, tell jeevesh2605."
+  else
+    echo "→ the $QUEUE backlog has drained; $out good orders are in $DLQ. Move them back (step 4f):"
+    echo "  bin/aws-local sqs start-message-move-task --source-arn $dlq_arn --destination-arn $(queue_arn "$QUEUE")"
+  fi
 else
-  echo "→ not yet ($out good orders waiting, $failed failed invocations). Check again in 30 s."
+  echo "→ not yet ($backlog on $QUEUE, $out good orders waiting, $failed failed invocations). Check again in 30 s."
 fi

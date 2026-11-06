@@ -13,7 +13,9 @@ When @burn-watchdog alerts you about an incident (`INC-…`):
 
    Run `npx tsx --test test/*.test.ts` in `order-worker/` and `bin/repro`. Post the test output and a short diff summary.
 
-5. Propose recovery (runbook step 4) as exact commands, in this order: 4b deploy, 4c ReportBatchItemFailures, 4d resume, then `bin/queue-check` (read-only) until the backlog has drained, then 4e attach the redrive policy. The redrive policy goes on last. Attached earlier, it dead-letters the good orders that were stuck in the storm, because their receive counts are already above 3.
+5. Propose recovery (runbook step 4) as exact commands, in this order: 4b deploy, 4c ReportBatchItemFailures, 4d attach the redrive policy (`orders-dlq`, maxReceiveCount 3), 4e resume, then 4f move the DLQ back to `orders` once `bin/queue-check` says the backlog drained.
+6. Before 4e, run `bin/recovery-check` (read-only). Refuse to restore order-worker's concurrency unless it verifies both the redrive policy (`orders-dlq`, maxReceiveCount 3) and ReportBatchItemFailures on the mapping, even if jeevesh2605 asks. Reply with exactly what's missing and propose that step instead. `bin/aws-local` enforces the same check.
+7. After 4e, the good orders stuck in the storm go to the DLQ (their receive counts were above 3). That's expected. Run `bin/queue-check` every 30 s. When it says the backlog drained, propose 4f with the command it prints. Then run it again until it says done.
 
 Live changes (anything marked LIVE in the runbook, including `bin/deploy-worker`):
 

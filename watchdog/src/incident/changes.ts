@@ -5,9 +5,9 @@
 // The watchdog sees a change on a sample, finds the command that caused it here, and pairs
 // agent changes with the "Approved by" lines posted in the room.
 import { existsSync, readFileSync } from "node:fs";
-import type { Approval, Incident, TimelineEntry } from "./detector.js";
+import type { Approval, Incident, Request, TimelineEntry } from "./detector.js";
 
-export type ChangeCategory = "concurrency" | "redrive" | "code" | "mapping";
+export type ChangeCategory = "concurrency" | "redrive" | "code" | "mapping" | "move";
 
 export interface ChangeRecord {
   at: string;
@@ -25,7 +25,11 @@ const OPS: Record<ChangeCategory, string[]> = {
   redrive: ["sqs set-queue-attributes"],
   code: ["lambda update-function-code", "lambda create-function"],
   mapping: ["lambda update-event-source-mapping", "lambda create-event-source-mapping"],
+  move: ["sqs start-message-move-task"],
 };
+
+/** Changes no sample can see (a DLQ move only shows as queue counts): read from the log. */
+export const LOGGED_ONLY: ChangeCategory[] = ["move"];
 
 export function loadChanges(file: URL = FILE): ChangeRecord[] {
   if (!existsSync(file)) return [];
@@ -73,6 +77,7 @@ const APPROVAL_HINTS: Record<ChangeCategory, RegExp> = {
   redrive: /redrive|set-queue-attributes/i,
   code: /deploy|update-function-code/i,
   mapping: /event-source-mapping|ReportBatchItemFailures|mapping/i,
+  move: /move-task|move the dlq|moved? .*back/i,
 };
 
 /** The kind of an action; inferred from its text for entries recorded before attribution. */
@@ -82,7 +87,37 @@ export function categoryOf(e: TimelineEntry): ChangeCategory | undefined {
   if (/redrive/i.test(e.text)) return "redrive";
   if (/new code/i.test(e.text)) return "code";
   if (/partial batch|event source mapping/i.test(e.text)) return "mapping";
+  if (/moved/i.test(e.text)) return "move";
   return undefined;
+}
+
+// What a runbook step changes, from its heading ("**4d. LIVE: attach the redrive policy**").
+const STEP_KIND: [RegExp, ChangeCategory][] = [
+  [/move/i, "move"],
+  [/redrive/i, "redrive"],
+  [/partial batch|ReportBatchItemFailures/i, "mapping"],
+  [/deploy/i, "code"],
+  [/pause|resume|concurrency/i, "concurrency"],
+];
+const kindOf = (text: string) => STEP_KIND.find(([re]) => re.test(text))?.[1];
+const RUNBOOK = new URL("../../../room/finops-runbook.md", import.meta.url);
+let steps: Map<string, ChangeCategory> | undefined;
+export function runbookSteps(file: URL = RUNBOOK): Map<string, ChangeCategory> {
+  if (steps && file === RUNBOOK) return steps;
+  const out = new Map<string, ChangeCategory>();
+  const text = existsSync(file) ? readFileSync(file, "utf8") : "";
+  for (const m of text.matchAll(/^\*\*(\d[a-z])\. ([^*]+)\*\*/gm)) {
+    const kind = /LIVE/.test(m[2]!) ? kindOf(m[2]!) : undefined;
+    if (kind) out.set(m[1]!, kind);
+  }
+  if (file === RUNBOOK) steps = out;
+  return out;
+}
+
+/** The kind of change a "run …" request asks for: by runbook step id, else by its words. */
+export function requestKind(text: string): ChangeCategory | undefined {
+  const step = /\b(\d[a-z])\b/i.exec(text)?.[1]?.toLowerCase();
+  return (step && runbookSteps().get(step)) || kindOf(text);
 }
 
 /** Recorded before change attribution existed (no source field): can't be attributed now. */
@@ -116,15 +151,40 @@ export function matchApprovals(inc: Incident): Map<number, Approval | undefined>
   return result;
 }
 
+/**
+ * Pairs each change (other than setup scripts') with the on-call human's "run …" request of
+ * the same kind, made up to 2 min before the command ran. Returns the request per timeline
+ * index; changes without one map to undefined.
+ */
+export function matchRequests(inc: Incident): Map<number, Request | undefined> {
+  const result = new Map<number, Request | undefined>();
+  const free = [...(inc.requests ?? [])];
+  (inc.timeline ?? []).forEach((e: TimelineEntry, i) => {
+    const category = categoryOf(e);
+    if (e.kind !== "action" || !category || e.source === "setup") return;
+    const t = Date.parse(e.changedAt ?? e.at);
+    let best = -1;
+    free.forEach((r, j) => {
+      const gap = t - Date.parse(r.at);
+      if (gap < -5_000 || gap > 120_000 || requestKind(r.text) !== category) return;
+      if (best < 0 || Date.parse(r.at) > Date.parse(free[best]!.at)) best = j; // the latest one
+    });
+    result.set(i, best >= 0 ? free.splice(best, 1)[0] : undefined);
+  });
+  return result;
+}
+
 /** Counts for the ledger's "Live changes" row and the auditor. */
 export function changeSummary(inc: Incident) {
   const actions = (inc.timeline ?? []).filter((e) => e.kind === "action");
-  const matches = matchApprovals(inc);
+  const lines = matchApprovals(inc);
+  const requests = matchRequests(inc);
   const timeline = inc.timeline ?? [];
+  // Approved: the on-call human asked for it ("run …"), or an approval line was posted for it.
   const approvedOf = (pred: (e: TimelineEntry) => boolean) =>
-    [...matches.entries()].filter(([i, a]) => a && pred(timeline[i]!)).length;
+    timeline.filter((e, i) => pred(e) && (lines.get(i) || requests.get(i))).length;
   const agent = actions.filter((e) => e.source === "agent").length;
-  const approved = approvedOf((e) => e.source === "agent");
+  const approved = approvedOf((e) => e.kind === "action" && e.source === "agent");
   const legacy = actions.filter(isLegacy).length;
   return {
     agent,

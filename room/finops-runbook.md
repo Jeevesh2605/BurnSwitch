@@ -40,17 +40,18 @@ Check `deploy-manifest.json` for the suspect deploy.
 bin/aws-local lambda put-function-concurrency --function-name order-worker --reserved-concurrent-executions 0
 ```
 
-That's all containment is. **Don't attach the redrive policy yet.** SQS moves a message to the DLQ when it's received with a receive count above `maxReceiveCount`, whatever the code does with it. Good orders stuck in the storm already have counts of 10–100+, so a redrive policy attached now would dead-letter them all on the first poll after resuming.
+That's all containment is. The recovery steps below go in a fixed order; don't skip ahead.
 
 ## 4. Recover, in this order
 
-| Step | What                            | Why this position                                                        |
-| ---- | ------------------------------- | ------------------------------------------------------------------------ |
-| 4a   | Patch + tests (local)           | The fix has to exist first                                               |
-| 4b   | LIVE: deploy the patch          | While paused: nothing runs the old code again                            |
-| 4c   | LIVE: ReportBatchItemFailures   | Bad orders now fail alone; good ones in their batch are kept             |
-| 4d   | LIVE: resume processing         | Stuck good orders drain; bad ones fail fast (no retries, cheap)          |
-| 4e   | LIVE: attach the redrive policy | Only after the backlog drained: only malformed orders are still retrying |
+| Step | What                                | Why this position                                                         |
+| ---- | ----------------------------------- | ------------------------------------------------------------------------- |
+| 4a   | Patch + tests (local)               | The fix has to exist first                                                |
+| 4b   | LIVE: deploy the patch              | While paused: nothing runs the old code again                             |
+| 4c   | LIVE: ReportBatchItemFailures       | Bad orders fail alone; good ones in their batch are kept                  |
+| 4d   | LIVE: attach the redrive policy     | Failing messages stop after 3 tries instead of retrying forever           |
+| 4e   | Check 4c + 4d, then LIVE: resume    | Never resume without both: `bin/aws-local` refuses until they're in place |
+| 4f   | LIVE: move the DLQ back to `orders` | Good orders dead-lettered on resume get processed; bad ones return        |
 
 **4a. Patch (local).**
 
@@ -78,37 +79,50 @@ Then check the mapping is still **Enabled**, with a direct read (LocalStack's li
 bin/aws-local lambda get-event-source-mapping --uuid <UUID> --query State
 ```
 
-**4d. LIVE: resume processing.**
-
-```bash
-bin/aws-local lambda delete-function-concurrency --function-name order-worker
-```
-
-Then wait for the backlog to drain. This is read-only; repeat every 30 s until it says it's safe (usually 1–2 min):
-
-```bash
-bin/queue-check
-```
-
-Between 4d and 4e, malformed orders keep retrying without a DLQ. That's deliberate and cheap: with the patch and ReportBatchItemFailures they fail alone in about 1 ms each and stay on the queue, nothing is lost, and good orders are processed normally. Run 4e as soon as `bin/queue-check` says drained.
-
-**4e. LIVE: attach the DLQ.** Malformed orders, now the only ones still retrying, move to `orders-dlq` on their next receive and stop costing anything.
+**4d. LIVE: attach the redrive policy** (`orders-dlq`, maxReceiveCount 3).
 
 ```bash
 bin/aws-local sqs set-queue-attributes --queue-url http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/orders --attributes '{"RedrivePolicy":"{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:000000000000:orders-dlq\",\"maxReceiveCount\":\"3\"}"}'
 ```
 
+**4e. Verify, then LIVE: resume processing.** First the read-only check:
+
+```bash
+bin/recovery-check
+```
+
+It must show ✓ for both the redrive policy (`orders-dlq`, maxReceiveCount 3) and ReportBatchItemFailures. If anything is missing, don't resume: tell jeevesh2605 exactly what's missing and propose that step. `bin/aws-local` runs the same check and refuses to restore concurrency until it passes. Then:
+
+```bash
+bin/aws-local lambda delete-function-concurrency --function-name order-worker
+```
+
+What happens next is expected. SQS moves a message to the DLQ when it's received with a receive count above `maxReceiveCount`, whatever the code does with it. Good orders stuck in the storm already have counts of 10–100+, so they go to `orders-dlq` on the first poll. Nothing is lost: step 4f brings them back.
+
+**4f. LIVE: move the DLQ back to `orders`.** Check the backlog first (read-only; repeat every 30 s, usually 1–2 min):
+
+```bash
+bin/queue-check
+```
+
+When it says the `orders` backlog has drained, run the command it prints (a move, not a delete):
+
+```bash
+bin/aws-local sqs start-message-move-task --source-arn arn:aws:sqs:us-east-1:000000000000:orders-dlq --destination-arn arn:aws:sqs:us-east-1:000000000000:orders
+```
+
+Moved messages start again with a receive count of 0. Good orders are processed. Malformed ones fail 3 times with the patched code (about 1 ms each) and return to `orders-dlq`. Run `bin/queue-check` until it says done: no good orders waiting.
+
 @burn-watchdog posts "resolved" once errors stay under 1% for 3 samples, and a final message count once traffic stops: every order sent must be processed, still queued, or in the DLQ, and the DLQ must hold only malformed orders.
 
 ## 5. After
 
-- `orders-dlq` should hold only malformed `checkout-v2` orders. The watchdog's final count shows it (good orders in the DLQ: 0). If it ever shows good orders there, replaying them is a separate LIVE decision for jeevesh2605 (`sqs start-message-move-task`), not part of this runbook.
+- `orders-dlq` should hold only malformed `checkout-v2` orders. The watchdog's final count shows it (good orders in the DLQ: 0).
 - Tell the upstream team (here, the `checkout-v2` client) about the payload change.
 - The ledger (`cost-ledger.md`) has the timeline, every live change with the command and approval behind it, the cost and the message count.
 
 ## Never
 
 - `purge-queue`, `delete-message`, `delete-queue` (`bin/aws-local` refuses these, and raw `aws` is denied).
-- Attaching the redrive policy before the backlog of good orders has drained (step 4e comes last).
-- Resuming before the patch and `ReportBatchItemFailures` are both in place.
+- Resuming before the patch, `ReportBatchItemFailures` and the redrive policy are all in place (`bin/recovery-check` must pass).
 - Changing production without an approval in this room. Every LIVE command prompts for approval each time: answer **Allow once**, never "Allow for this session".

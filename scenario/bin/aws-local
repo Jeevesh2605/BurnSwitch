@@ -13,4 +13,14 @@ for banned in " purge-queue " " delete-message " " delete-message-batch " " dele
     exit 2
   fi
 done
+# Restoring concurrency (delete-function-concurrency, or a reserved concurrency above 0) needs
+# the redrive policy and ReportBatchItemFailures in place first (runbook step 4e).
+if [[ "$args" == *" delete-function-concurrency "* ]] ||
+  { [[ "$args" == *" put-function-concurrency "* ]] &&
+    [[ ! "$args" =~ --reserved-concurrent-executions[=\ ]+0[\ ] ]]; }; then
+  if ! "$(dirname "$0")/recovery-check" >&2; then
+    echo "aws-local: refusing to restore concurrency until the items above are in place." >&2
+    exit 3
+  fi
+fi
 awsl "$@"

@@ -115,6 +115,21 @@ Flagged by @finops-auditor: unsigned changes, good orders in the DLQ, a 10-messa
 - [ ] You: paste the updated `room/instructions.md` (room Configuration) and `room/agents/claude-code.md` + `finops-auditor.md` (each agent's instructions), then `!reset` both agents
 - [ ] You: a full clean run (`npm run rehearse`) and the auditor's report
 
+## Audit fixes, rounds 2–3 (after the INC-1438 and INC-0348 runs)
+
+- [x] One incident at a time: a rehearsal closes an open incident as **abandoned** (kept in the ledger). A pause before the alert is recorded as "contained before alert". Approvals and requests that arrive before the incident opens are held for 10 min.
+- [x] Time to contain = alert → the containment command's timestamp, in the ledger and in the contained and resolved messages.
+- [x] Cost avoided = (peak − baseline) × `cost.unnoticed_hours` (8 h, in `config/thresholds.json`), with the assumption stated. The "after" burn is measured only once the backlog has drained.
+- [x] `npm run demo:reset [-- --room "<group>"]`: archives the state, deletes cost-ledger.md, switches room (agents and instructions), recreates LocalStack. An exact group-name match wins (every Telegram room is named "BurnSwitch: <group>").
+- [x] Attribution race (INC-0348's 4c showed "source unknown"): a sample can see a change before `bin/aws-local` has logged it. Unknown changes are retried for 2 min.
+- [x] Each change is paired with jeevesh2605's "run …" message (same kind, up to 2 min before), as well as the approval line. Runbook step ids map to change kinds from the runbook headings.
+- [x] Recovery order, as requested: 4b deploy → 4c ReportBatchItemFailures → 4d redrive → 4e `bin/recovery-check`, then resume → 4f move the DLQ back (`sqs start-message-move-task`). `bin/aws-local` refuses to restore concurrency until the redrive policy (orders-dlq, maxReceiveCount 3) and ReportBatchItemFailures are verified. 4f is needed because resuming with redrive dead-letters the stuck good orders (receive counts above 3); moved messages restart at receive count 0.
+- [x] Verified end to end on LocalStack (dry-run watchdog, steps run through bin/ helpers), 2026-11-06:
+  - the resume was refused while anything was missing;
+  - 203 good orders went to the DLQ on resume, and 4f brought them back;
+  - final count: 747 sent (609 + 138) = 609 processed + 0 queued + 138 in the DLQ (138 malformed, 0 good) ✓;
+  - all 6 changes were attributed as `source: agent`.
+
 ## Phase 7 — Submission polish
 
 - [ ] README, Mermaid architecture, quickstart, Switch feature map, video placeholder
@@ -124,7 +139,7 @@ Flagged by @finops-auditor: unsigned changes, good orders in the DLQ, a 10-messa
 
 - Messaging app: **Telegram only** (one room maps to one app). Approval requests get inline Allow/Deny buttons; Switch polls Telegram, so nothing has to be publicly reachable.
 - Local Switch server (run by Switch Console, switch-core 0.31.0): bridge `http://127.0.0.1:50556`, Gateway `http://127.0.0.1:50555`. Console can move ports on restart; the watchdog re-reads them from Console's `ports.json`.
-- Room: `BurnSwitch: finops-control` (`77c411ba-1549-4057-9333-046be193408c`), Telegram group.
+- Room: `BurnSwitch: BurnSwitch` (`3e5be04f…`, the recording room) since 2026-11-06; previously `BurnSwitch: finops-control` (`77c411ba…`).
 - LocalStack: auth token required; image pinned to `2026.10.0`.
 
 ## Notes from the Switch docs (verified 2026-11-04)

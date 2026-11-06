@@ -14,11 +14,11 @@ export type Status = "burning" | "contained" | "resolved" | "abandoned";
 
 export interface TimelineEntry {
   at: string;
-  kind: "event" | "action" | "approval";
+  kind: "event" | "action" | "approval" | "request";
   text: string;
   // For actions: who made the change (from .state/change-log.jsonl; see changes.ts).
   source?: "agent" | "setup" | "unknown";
-  category?: "concurrency" | "redrive" | "code" | "mapping";
+  category?: "concurrency" | "redrive" | "code" | "mapping" | "move";
   command?: string;
   changedAt?: string; // when the command ran
 }
@@ -28,6 +28,14 @@ export interface Approval {
   by: string;
   action: string;
   reportedBy: string; // who posted it in the room (Switch doesn't expose answered_by to agents)
+  messageId: string;
+}
+
+/** The on-call human asking @claude-code to run a step ("@claude-code run 4c"). */
+export interface Request {
+  at: string;
+  by: string;
+  text: string;
   messageId: string;
 }
 
@@ -61,6 +69,7 @@ export interface Incident {
   // Ledger (Phase 4)
   timeline: TimelineEntry[];
   approvals: Approval[];
+  requests?: Request[];
   spendUsd: number; // estimated spend while the incident was open
   excessUsd: number; // the part of it above baseline
   lastSampleAt?: string;

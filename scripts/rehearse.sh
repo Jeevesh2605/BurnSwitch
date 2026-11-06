@@ -5,7 +5,7 @@
 #   Act 1  burn alert             (automatic, ~1 min after the burn starts)
 #   Act 2  handoff + diagnosis    (@claude-code investigates and proposes; you read)
 #   Act 3  containment            (you approve 3a from your phone)
-#   Act 4  fix + recovery         (you approve 4b, 4c, 4d, then 4e once the backlog drained)
+#   Act 4  fix + recovery         (you approve 4b, 4c, 4d, 4e, then 4f once the backlog drained)
 #   Act 5  resolved + ledger      (automatic: final message count, then the ledger)
 #   Act 6  late auditor           (you invite @finops-auditor and ask for the post-mortem)
 # Ctrl-C stops the rehearsal and the traffic; the watchdog keeps running.
@@ -91,14 +91,17 @@ bold "Act 4: fix and recovery (your phone)"
 say "When the patch and tests are posted, send one at a time, Allow once on each:"
 say "    @claude-code run 4b      (deploy the patch)"
 say "    @claude-code run 4c      (partial batch failures)"
-say "    @claude-code run 4d      (resume processing; then it runs bin/queue-check)"
-say "    @claude-code run 4e      (redrive policy, once queue-check says the good orders drained)"
-say "  Redrive goes last on purpose: attached earlier, it dead-letters the stuck good orders."
+say "    @claude-code run 4d      (redrive policy: orders-dlq, maxReceiveCount 3)"
+say "    @claude-code run 4e      (it runs bin/recovery-check, then resumes processing)"
+say "    @claude-code run 4f      (move the DLQ back, once queue-check says the backlog drained)"
+say "  After 4e the stuck good orders go to the DLQ (receive counts above 3); 4f brings them back."
 wait_for "INCIDENT $INC resolved"
 say "✅ resolved at $(elapsed)."
 
 bold "Act 5: after burn, final count, ledger"
-say "If 4e isn't done yet: @claude-code run 4e (once queue-check says drained), Allow once."
+say "If 4f isn't done yet: @claude-code run 4f (once queue-check says drained), Allow once."
+wait_for "action for $INC: Messages moved from the DLQ"
+say "📦 DLQ moved back at $(elapsed): good orders are being processed, malformed ones return."
 say "Waiting for the after burn: backlog drained under normal traffic for a minute ..."
 wait_for "after burn for $INC"
 tail -n +"$LOG_START" "$LOG" | grep "after burn for $INC" | tail -1 | sed 's/.*after burn for /  📉 /'

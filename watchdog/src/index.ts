@@ -19,7 +19,13 @@ import { alertText, containedText, resolvedText } from "./incident/messages.js";
 import { hasState, loadState, saveState } from "./incident/store.js";
 import { loadChanges } from "./incident/changes.js";
 import { readTrafficStats, reconcile, reconciliationLine } from "./incident/reconcile.js";
-import { noteApproval, parseApproval, track } from "./incident/timeline.js";
+import {
+  noteApproval,
+  noteRequest,
+  parseApproval,
+  parseRequest,
+  track,
+} from "./incident/timeline.js";
 import { Ledger, renderLedger, restoreFromLedger } from "./ledger/ledger.js";
 import { publishRunbook } from "./ledger/runbook.js";
 import { log } from "./log.js";
@@ -131,6 +137,8 @@ const pendingApprovals: {
   id: string;
   ts: number;
 }[] = [];
+// The on-call human's "@claude-code run …" messages, held the same way.
+const pendingRequests: { by: string; text: string; id: string; ts: number }[] = [];
 function attachPendingApprovals(inc: Incident): void {
   const since = Date.parse(inc.openedAt) - 10 * 60_000;
   for (const a of pendingApprovals.splice(0)) {
@@ -138,8 +146,13 @@ function attachPendingApprovals(inc: Incident): void {
     noteApproval(inc, a.approval, a.sender, a.id, new Date(a.ts).toISOString());
     log("info", `ledger: attached ${a.approval.by}'s earlier approval to ${inc.id}`);
   }
+  for (const r of pendingRequests.splice(0)) {
+    if (r.ts < since) continue;
+    noteRequest(inc, r.by, r.text, r.id, new Date(r.ts).toISOString());
+    log("info", `ledger: attached ${r.by}'s earlier request "${r.text}" to ${inc.id}`);
+  }
 }
-const AFTER_RESOLVE_MS = 30 * 60_000; // approvals for late steps (4e) still count
+const AFTER_RESOLVE_MS = 30 * 60_000; // approvals for late steps (4f) still count
 function incidentAt(ms: number): Incident | undefined {
   const all = [
     ...(detector.state.incident ? [detector.state.incident] : []),
@@ -163,6 +176,26 @@ conn.on("event", (ev) => {
   // The watchdog itself and the auditor (which quotes approvals in its report) don't approve.
   if (["burn-watchdog", "finops-auditor"].includes(p.sender_name) || typeof p.body !== "string")
     return;
+  // The on-call human asking @claude-code to run a step: what each change is paired with.
+  const request =
+    process.env.ONCALL_NAME && p.sender_name === process.env.ONCALL_NAME
+      ? parseRequest(p.body)
+      : undefined;
+  if (request) {
+    const inc = incidentAt(p.timestamp);
+    if (!inc) {
+      pendingRequests.push({ by: p.sender_name, text: request, id: p.message_id, ts: p.timestamp });
+      return;
+    }
+    if (
+      noteRequest(inc, p.sender_name, request, p.message_id, new Date(p.timestamp).toISOString())
+    ) {
+      log("info", `ledger: ${p.sender_name} asked "${request}" (${inc.id})`);
+      saveState(detector.state);
+      void syncLedger();
+    }
+    return;
+  }
   const approval = parseApproval(p.body);
   if (!approval) return;
   const inc = incidentAt(p.timestamp);
@@ -384,14 +417,13 @@ async function tick(): Promise<void> {
     const b = burnOf(s, pricing);
     last = { sample: s, burn: b };
     const events = detector.observe(s, b);
-    track(
-      detector.state.incident ?? awaitingFinalCount(),
-      events,
-      s,
-      b,
-      thresholds.sample_interval_s,
-      loadChanges(),
-    );
+    const tracked = detector.state.incident ?? awaitingFinalCount();
+    const seen = tracked?.timeline?.length ?? 0;
+    track(tracked, events, s, b, thresholds.sample_interval_s, loadChanges());
+    for (const e of tracked?.timeline?.slice(seen) ?? []) {
+      if (e.kind === "action")
+        log("info", `action for ${tracked!.id}: ${e.text} (source: ${e.source})`);
+    }
     const resolved = events.find((e) => e.type === "resolved")?.incident;
     if (resolved) resolved.reconciliation = await countMessages(s);
     saveState(detector.state);

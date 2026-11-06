@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Read-only: is it safe to restore order-worker's concurrency (runbook step 4e)?
+# Both must be in place first:
+#   - orders has a redrive policy to orders-dlq with maxReceiveCount 3
+#   - the event source mapping reports partial batch failures (ReportBatchItemFailures)
+# Exit 0 if both are verified, 3 if not (with what's missing). bin/aws-local runs this before
+# any command that restores concurrency, and refuses the command if it fails.
+export BURNSWITCH_FOLLOW_TARGET=1
+source "$(dirname "$0")/../infra/lib.sh" "$@"
+missing=()
+
+policy="$(awsl sqs get-queue-attributes --queue-url "$(queue_url "$QUEUE")" \
+  --attribute-names RedrivePolicy --query Attributes.RedrivePolicy --output text 2>/dev/null)"
+if [[ -z "$policy" || "$policy" == "None" ]]; then
+  missing+=("the redrive policy on $QUEUE (step 4d): none attached")
+else
+  target="$(jq -r .deadLetterTargetArn <<<"$policy" 2>/dev/null)"
+  max="$(jq -r .maxReceiveCount <<<"$policy" 2>/dev/null)"
+  if [[ "$target" != *":$DLQ" || "$max" != "3" ]]; then
+    missing+=("the redrive policy on $QUEUE (step 4d): it points to ${target##*:} with maxReceiveCount $max, expected $DLQ and 3")
+  else
+    echo "✓ redrive policy: $QUEUE → $DLQ, maxReceiveCount 3"
+  fi
+fi
+
+uuid="$(mapping_uuid 2>/dev/null)"
+types="$(awsl lambda get-event-source-mapping --uuid "$uuid" \
+  --query 'FunctionResponseTypes' --output text 2>/dev/null)"
+if [[ "$types" == *ReportBatchItemFailures* ]]; then
+  echo "✓ event source mapping $uuid: ReportBatchItemFailures"
+else
+  missing+=("ReportBatchItemFailures on the event source mapping (step 4c)")
+fi
+
+if ((${#missing[@]})); then
+  echo "✗ not safe to restore concurrency. Missing:"
+  printf '  - %s\n' "${missing[@]}"
+  exit 3
+fi
+echo "→ safe to restore concurrency (step 4e)."
