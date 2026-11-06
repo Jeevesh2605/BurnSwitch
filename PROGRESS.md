@@ -14,7 +14,7 @@
 ## Phase 0 — Scaffold
 
 - [x] Repo, TypeScript config, ESLint + Prettier, `.env.example`, `.gitignore`, MIT license
-- [x] `docker-compose.yml`: LocalStack (Docker socket mounted) + watchdog service
+- [x] `docker-compose.yml`: LocalStack (Docker socket mounted). The watchdog runs with npm (its compose service was removed on 2026-11-06: it couldn't reach the local Switch server from a container).
 - [x] npm scripts: `scenario:up`, `scenario:reset`, `burn:start`, `burn:stop`, `watchdog:dev` (Phase 1/2 stubs for now)
 
 ## Phase 1 — The burning scenario (LocalStack)

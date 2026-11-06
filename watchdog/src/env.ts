@@ -2,7 +2,7 @@
 try {
   process.loadEnvFile();
 } catch {
-  // No .env file: rely on the real environment (e.g. docker compose env_file).
+  // No .env file: rely on the real environment.
 }
 
 export function requireEnv(name: string): string {
