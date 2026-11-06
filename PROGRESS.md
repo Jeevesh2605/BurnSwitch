@@ -133,7 +133,7 @@ Flagged by @finops-auditor: unsigned changes, good orders in the DLQ, a 10-messa
 ## Phase 7 — Submission polish
 
 - [x] README: problem, solution, "how we use Switch" (Mermaid, with the Allow-once switch), feature map, approach, quickstart, limitations, video placeholder
-- [x] `docs/architecture.md` (sequence diagram, the switch, watchdog parts, recovery order, safety rails); troubleshooting rows added to docs/setup.md
+- [x] Architecture merged into README.md (colored flowchart + sequence diagram, the switch, watchdog parts, recovery order); troubleshooting rows added to docs/setup.md
 
 ## Decisions
 
