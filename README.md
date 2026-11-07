@@ -4,7 +4,9 @@
 
 Built for the _Flip the Switch_ hackathon, Track 01.
 
-> 🎬 Demo video: _coming soon_
+> 🎬 **Demo video:** [youtu.be/dIdHmdBiKkk](https://youtu.be/dIdHmdBiKkk)
+
+[![BurnSwitch demo video](https://img.youtube.com/vi/dIdHmdBiKkk/hqdefault.jpg)](https://youtu.be/dIdHmdBiKkk)
 
 ## The problem
 
